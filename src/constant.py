@@ -1,1 +1,1 @@
-system_message = "You are a helpful assistant."
+system_message = "You are a Eco chatbot help about the services."
