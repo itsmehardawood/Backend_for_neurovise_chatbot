@@ -165,6 +165,8 @@ async def save_business_settings(
         raise HTTPException(status_code=500, detail=f"Internal Server Error: {e}")
 
 
+from fastapi import APIRouter, HTTPException
+from bson import ObjectId
 
 @app.post("/chat", response_model=ChatResponse)
 async def chat_endpoint(chat_request: ChatRequest):
@@ -172,7 +174,7 @@ async def chat_endpoint(chat_request: ChatRequest):
         # Convert user_id string to ObjectId
         try:
             user_id = ObjectId(chat_request.user_id)
-        except Exception as e:
+        except Exception:
             raise HTTPException(status_code=400, detail="Invalid user_id format")
 
         # Fetch user data using the provided user_id
@@ -185,44 +187,59 @@ async def chat_endpoint(chat_request: ChatRequest):
         if not business_settings:
             raise HTTPException(status_code=404, detail="Business settings not found for the user")
 
-        # Assuming services are embedded inside the business settings, extract services
+        # Extract services
         services = business_settings.get("services", [])
         if not services:
             raise HTTPException(status_code=404, detail="Services not found for the user")
 
-        # Customize the system message with business services and working hours
+        # Build detailed service info
         services_info = []
         for service in services:
-            service_info = f"Service: {service['serviceName']}\nDescription: {service['description']}\n"
-            if service.get('working_hours'):
-                working_hours_info = ", ".join(
-                    [f"{day}: {hours['start']} - {hours['end']}" for day, hours in service['working_hours'].items() if
-                     hours.get('active')]
+            service_info = f"Service: {service.get('serviceName', 'N/A')}\n"
+            service_info += f"Description: {service.get('description', 'N/A')}\n"
+            service_info += f"Price Type: {service.get('priceType', 'N/A')}\n"
+            service_info += f"Price: {service.get('price', 'N/A')}\n"
+            service_info += f"Service ID: {service.get('id', 'N/A')}\n"
+            service_info += f"Active: {service.get('isActive', True)}\n"
 
+            # Handle working hours
+            working_hours = service.get("working_hours", {})
+            if isinstance(working_hours, dict):
+                working_hours_info = ", ".join(
+                    f"{day}: {hours.get('start', 'N/A')} - {hours.get('end', 'N/A')}"
+                    for day, hours in working_hours.items()
+                    if hours.get("active")
                 )
-                service_info += f"Working hours: {working_hours_info if working_hours_info else 'Not specified'}\n"
+                service_info += f"Working Hours: {working_hours_info or 'Not specified'}\n"
+            else:
+                service_info += "Working Hours: Not specified\n"
+
             services_info.append(service_info)
 
-        services_details = "\n".join(services_info) if services_info else "No services available."
+        services_details = "\n".join(services_info)
 
-        # Get chat tone setting (customize the response based on user preferences)
-        chat_tone = business_settings.get('chat_tone', 'default')  # Default tone if not found
+        # Get chat tone setting
+        chat_tone = business_settings.get("chat_tone", "default")
 
-        # Customize system message with services and tone
-        system_message = f"The business offers the following services:\n{services_details}\n"
-        print(services_details)
-        system_message += f"Please respond in a {chat_tone} tone."
+        # Build system message
+        system_message = (
+            f"The business offers the following services:\n\n{services_details}\n"
+            f"Please respond in a {chat_tone} tone."
+        )
 
-        # Get the chat response from OpenAI
-        response = get_chat_completion(chat_request.query, system_message)
+        print(system_message)  # Debug print, replace with logger if needed
+
+        # Get response from OpenAI (async if needed)
+        response = await get_chat_completion(chat_request.query, system_message)
 
         return ChatResponse(
             user_id=chat_request.user_id,
             response=response
         )
+
     except HTTPException as e:
-        print(f"HTTP error: {e.detail}")  # Log the error message for debugging
+        print(f"HTTP error: {e.detail}")
         raise e
     except Exception as e:
-        print(f"Unexpected error: {str(e)}")  # Log unexpected errors
+        print(f"Unexpected error: {str(e)}")
         raise HTTPException(status_code=500, detail="Internal server error")
