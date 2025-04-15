@@ -144,12 +144,14 @@ async def save_business_settings(
         new_services_serialized = [
             {
                 **service.dict(exclude={"working_hours"}),
+                "price": float(service.price),  # Convert Decimal to float
                 "working_hours": {
                     day: vars(hours) for day, hours in service.working_hours.items()
                 } if service.working_hours else None,
             }
             for service in settings.services
         ]
+
 
         # Fetch existing settings
         existing_settings = await business_settings_collection.find_one(

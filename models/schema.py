@@ -1,3 +1,4 @@
+from decimal import Decimal
 from pydantic import BaseModel
 from typing import List, Dict
 
@@ -27,7 +28,7 @@ class Service(BaseModel):
     serviceName: str
     description: str
     priceType: str
-    price: str
+    price: Decimal
     isActive: bool
     id: int
     working_hours: Dict[str, WorkingHours] = None  # Optional working hours per service

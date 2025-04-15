@@ -3,7 +3,7 @@ from twilio.twiml.messaging_response import MessagingResponse
 from utils.utils import get_chat_completion
 import os
 from dotenv import load_dotenv
-
+from src.constant import system_message
 load_dotenv()
 
 
@@ -16,9 +16,9 @@ async def whatsapp_webhook(
     From: str = Form(...)
 ):
     # Generate chatbot response
-    reply = get_chat_completion(Body)
+    reply = get_chat_completion(Body, system_message)
 
-    # Prepare Twilio response
+    # Prepare Twilio responsed
     twilio_response = MessagingResponse()
     twilio_response.message(reply)
 
