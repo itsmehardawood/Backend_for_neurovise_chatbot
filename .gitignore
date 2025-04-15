@@ -11,3 +11,4 @@ src/__pycache__/
 utils/__pycache__/
 # Ignore temporary files
 *.tmp
+dep_env/
