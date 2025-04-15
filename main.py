@@ -43,12 +43,23 @@ MONGO_URI = os.getenv("MONGO_URI")
 # users_collection= os.getenv("USERS_COLLECTION")
 # services_collection= os.getenv("SERVICES_COLLECTION")
 
-# MongoDB(MONGO_URI)
-client = AsyncIOMotorClient(MONGO_URI)
+# # MongoDB(MONGO_URI)
+# client = AsyncIOMotorClient(MONGO_URI)
+# db = client.Echo_db
+# users_collection = db.users
+# business_settings_collection = db.services
+from motor.motor_asyncio import AsyncIOMotorClient
+import ssl
+
+
+client = AsyncIOMotorClient(
+    MONGO_URI,
+    tls=True
+)
+
 db = client.Echo_db
 users_collection = db.users
 business_settings_collection = db.services
-
 
 # ─── UTILS ─────────────────────────────────────────────────────────────────────
 def hash_password(password: str) -> str:
