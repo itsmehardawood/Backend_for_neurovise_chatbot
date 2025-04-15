@@ -81,7 +81,7 @@ async def signup(user: User):
 @app.post("/login", response_model=LoginResponse)
 async def login_for_access_token(form_data: OAuth2PasswordRequestForm = Depends()):
     """
-    This endpoint is used by Swagger UI’s “Authorize” dialog.
+    This endpoint is used by Swagger UI's "Authorize" dialog.
     It expects form fields: username, password, grant_type=password.
     """
     user = await get_user_by_email(form_data.username)
