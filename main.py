@@ -116,6 +116,12 @@ async def get_current_user(token: str = Depends(oauth2_scheme)):
         raise credentials_exc
     return user
 
+@app.post("/logout")
+async def logout():
+    """
+    Stateless logout: just instruct the client to delete the token.
+    """
+    return {"message": "Logout successful. Please remove the token on the client side."}
 # ─── PROTECTED BUSINESS SETTINGS ───────────────────────────────────────────────
 @app.post("/business-service")
 async def save_business_settings(
