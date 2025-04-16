@@ -1,6 +1,7 @@
 from decimal import Decimal
 from pydantic import BaseModel
 from typing import List, Dict
+from typing import Optional
 
 class ChatRequest(BaseModel):
     user_id: str
@@ -31,7 +32,25 @@ class Service(BaseModel):
     price: Decimal
     isActive: bool
     id: int
-    working_hours: Dict[str, WorkingHours] = None  # Optional working hours per service
+    working_hours: Optional[Dict[str, WorkingHours]] = None
+    
+class WorkingHoursUpdate(BaseModel):
+    start: Optional[str] = None
+    end: Optional[str] = None
+    active: Optional[bool] = None
+
+class ServiceUpdate(BaseModel):
+    serviceName: Optional[str] = None
+    description: Optional[str] = None
+    priceType: Optional[str] = None
+    price: Optional[Decimal] = None
+    isActive: Optional[bool] = None
+    working_hours: Optional[Dict[str, WorkingHoursUpdate]] = None    
+    
+    
+    
+    
+    
 
 class BusinessSettings(BaseModel):
     services: List[Service]
