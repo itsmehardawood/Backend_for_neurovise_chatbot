@@ -104,10 +104,7 @@ async def signup(user: User):
 
 @app.post("/login", response_model=LoginResponse)
 async def login_for_access_token(form_data: OAuth2PasswordRequestForm = Depends()):
-    """
-    This endpoint is used by Swagger UI's "Authorize" dialog.
-    It expects form fields: username, password, grant_type=password.
-    """
+
     user = await get_user_by_email(form_data.username)
     if not user or not verify_password(form_data.password, user["password"]):
         raise HTTPException(
@@ -140,12 +137,9 @@ async def get_current_user(token: str = Depends(oauth2_scheme)):
         raise credentials_exc
     return user
 
-@app.post("/logout")
-async def logout():
-    """
-    Stateless logout: just instruct the client to delete the token.
-    """
-    return {"message": "Logout successful. Please remove the token on the client side."}
+
+
+
 
 
 # ─── PROTECTED BUSINESS SETTINGS ───────────────────────────────────────────────
@@ -159,7 +153,7 @@ async def save_business_settings(
         new_services_serialized = [
             {
                 **service.dict(exclude={"working_hours"}),
-                "price": float(service.price),  # Convert Decimal to float
+                 "price": f"{service.price:.2f}",  # Properly formatted as string
                 "working_hours": {
                     day: vars(hours) for day, hours in service.working_hours.items()
                 } if service.working_hours else None,
@@ -457,6 +451,7 @@ async def start_chat(data: StartChatRequest):
 class ChatRequest(BaseModel):
     session_id: str
     query: str
+    user_id: Optional[str] = None  # Optional for backward compatibility
 
 @app.post("/chat", response_model=ChatResponse)
 async def chat_endpoint(chat_request: ChatRequest):
@@ -466,10 +461,53 @@ async def chat_endpoint(chat_request: ChatRequest):
         if not session:
             raise HTTPException(status_code=404, detail="Chat session not found")
 
-        # Generate chat response
-        response = get_chat_completion(chat_request.query, "You are chatting with our business assistant.")
+        # Get user_id from session if not provided
+        user_id = chat_request.user_id or session.get("user_id")
+        if not user_id:
+            raise HTTPException(status_code=400, detail="User ID not found in session")
 
-        # Add chat entry
+        try:
+            user_id_obj = ObjectId(user_id)
+        except Exception:
+            raise HTTPException(status_code=400, detail="Invalid user_id format")
+
+        # Get user and business settings (from commented version)
+        user = await users_collection.find_one({"_id": user_id_obj})
+        if not user:
+            raise HTTPException(status_code=404, detail="User not found")
+
+        business_settings = await business_settings_collection.find_one({"user_id": user_id_obj})
+        if not business_settings:
+            raise HTTPException(status_code=404, detail="Business settings not found for the user")
+
+        services = business_settings.get("services", [])
+        services_info = []
+        for service in services:
+            service_info = f"Service: {service['serviceName']}\nDescription: {service['description']}\n"
+            if 'price' in service:
+                service_info += f"Price: ${service['price']}\n"
+            else:
+                service_info += "Price: Not specified\n"
+
+            if service.get('working_hours'):
+                working_hours_info = ", ".join(
+                    [f"{day}: {hours['start']} - {hours['end']}" for day, hours in service['working_hours'].items() if
+                     hours.get('active')]
+                )
+                service_info += f"Working hours: {working_hours_info if working_hours_info else 'Not specified'}\n"
+
+            services_info.append(service_info)
+
+        services_details = "\n".join(services_info) if services_info else "No services available."
+        chat_tone = business_settings.get('chat_tone', 'default')
+
+        system_message = f"The business offers the following services:\n{services_details}\n"
+        system_message += f"Please respond in a {chat_tone} tone."
+
+        # Generate chat response with business context
+        response = get_chat_completion(chat_request.query, system_message)
+
+        # Update session with new message
         chat_doc = {
             "query": chat_request.query,
             "response": response,
@@ -478,11 +516,17 @@ async def chat_endpoint(chat_request: ChatRequest):
 
         await chat_sessions_collection.update_one(
             {"session_id": chat_request.session_id},
-            {"$push": {"messages": chat_doc}}
+            {
+                "$push": {"messages": chat_doc},
+                "$set": {
+                    "last_activity": datetime.utcnow(),
+                    "user_id": user_id  # Ensure user_id is stored in session
+                }
+            }
         )
 
         return ChatResponse(
-            user_id=str(session["_id"]),
+            user_id=user_id,
             response=response
         )
 
@@ -493,100 +537,51 @@ async def chat_endpoint(chat_request: ChatRequest):
         print(f"Unexpected error: {str(e)}")
         raise HTTPException(status_code=500, detail="Internal server error")
 
-# @app.post("/chat", response_model=ChatResponse)
-# async def chat_endpoint(chat_request: ChatRequest):
-#     try:
-#         try:
-#             user_id = ObjectId(chat_request.user_id)
-#         except Exception:
-#             raise HTTPException(status_code=400, detail="Invalid user_id format")
+# chat history 
 
-#         user = await users_collection.find_one({"_id": user_id})
-#         if not user:
-#             raise HTTPException(status_code=404, detail="User not found")
+from typing import List , Any
 
-#         business_settings = await business_settings_collection.find_one({"user_id": user_id})
-#         if not business_settings:
-#             raise HTTPException(status_code=404, detail="Business settings not found for the user")
+from fastapi import Query
 
-#         services = business_settings.get("services", [])
-#         if not services:
-#             raise HTTPException(status_code=404, detail="Services not found for the user")
+class ChatHistoryResponse(BaseModel):
+    full_name: str
+    email: EmailStr
+    phone_number: str
+    session_id: str
+    created_at: datetime
+    messages: List[Dict[str, Any]]
+    last_activity: Optional[datetime] = None
+    user_id: Optional[str] = None
 
-#         services_info = []
-#         for service in services:
-#             service_info = f"Service: {service['serviceName']}\nDescription: {service['description']}\n"
-#             if 'price' in service:
-#                 service_info += f"Price: ${service['price']}\n"
-#             else:
-#                 service_info += "Price: Not specified\n"
+# @app.get("/chat-history", response_model=ChatHistoryResponse)
+# async def get_chat_history(session_id: str = Query(..., description="Chat session ID")):
+#     session = await chat_sessions_collection.find_one({"session_id": session_id})
+#     if not session:
+#         raise HTTPException(status_code=404, detail="Chat session not found")
 
-#             if service.get('working_hours'):
-#                 working_hours_info = ", ".join(
-#                     [f"{day}: {hours['start']} - {hours['end']}" for day, hours in service['working_hours'].items() if
-#                      hours.get('active')]
-#                 )
-#                 service_info += f"Working hours: {working_hours_info if working_hours_info else 'Not specified'}\n"
+#     # Convert ObjectId to string for serialization if needed
+#     if session.get("user_id") and isinstance(session["user_id"], ObjectId):
+#         session["user_id"] = str(session["user_id"])
 
-#             services_info.append(service_info)
+#     return ChatHistoryResponse(
+#         full_name=session["full_name"],
+#         email=session["email"],
+#         phone_number=session["phone_number"],
+#         session_id=session["session_id"],
+#         created_at=session["created_at"],
+#         messages=session.get("messages", []),
+#         last_activity=session.get("last_activity"),
+#         user_id=session.get("user_id")
+#     )
+@app.get("/chat-sessions/{user_id}")
+async def get_chat_sessions(user_id: str):
+    sessions_cursor = chat_sessions_collection.find({"user_id": user_id})
+    sessions = []
+    async for session in sessions_cursor:
+        session["_id"] = str(session["_id"])  # convert ObjectId to string
+        sessions.append(session)
 
-#         services_details = "\n".join(services_info) if services_info else "No services available."
-#         chat_tone = business_settings.get('chat_tone', 'default')
+    if not sessions:
+        raise HTTPException(status_code=404, detail="No chat sessions found for this user.")
 
-#         system_message = f"The business offers the following services:\n{services_details}\n"
-#         system_message += f"Please respond in a {chat_tone} tone."
-
-#         # Get chat response from model
-#         response = get_chat_completion(chat_request.query, system_message)
-
-#         current_time = datetime.utcnow()
-#         one_hour_ago = current_time - timedelta(hours=1)
-
-#         # Find latest session for the user
-#         latest_session = await chat_history_collection.find_one(
-#             {"user_id": user_id},
-#             sort=[("last_activity", -1)]
-#         )
-
-#         chat_doc = {
-#             "query": chat_request.query,
-#             "response": response,
-#             "timestamp": current_time
-#         }
-
-#         if latest_session and latest_session["last_activity"] > one_hour_ago:
-#             # Append to the existing session
-#             await chat_history_collection.update_one(
-#                 {"_id": latest_session["_id"]},
-#                 {
-#                     "$push": {"messages": chat_doc},
-#                     "$set": {"last_activity": current_time}
-#                 }
-#             )
-#         else:
-#             # Start a new session
-#             new_session_id = str(uuid.uuid4())
-#             await chat_history_collection.insert_one({
-#                 "user_id": user_id,
-#                 "session_id": new_session_id,
-#                 "last_activity": current_time,
-#                 "messages": [chat_doc]
-#             })
-
-#         return ChatResponse(
-#             user_id=chat_request.user_id,
-#             response=response
-#         )
-
-#     except HTTPException as e:
-#         print(f"HTTP error: {e.detail}")
-#         raise e
-#     except Exception as e:
-#         print(f"Unexpected error: {str(e)}")
-#         raise HTTPException(status_code=500, detail="Internal server error")
-
-# Run with Uvicorn
-port = int(os.getenv("PORT", 8000))
-if __name__ == "__main__":
-    import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=port)
+    return {"user_id": user_id, "chat_sessions": sessions}
