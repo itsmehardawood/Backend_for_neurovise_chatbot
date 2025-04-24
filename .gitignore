@@ -3,6 +3,8 @@
 
 # Ignore the /node_modules directory
 venv/
+dep_env/
+test/
 
 # Ignore .env file
 .env
