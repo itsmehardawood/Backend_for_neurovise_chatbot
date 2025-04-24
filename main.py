@@ -29,6 +29,22 @@ from bson import Decimal128
 from decimal import Decimal
 from fastapi import APIRouter, HTTPException
 from bson import ObjectId
+import uuid
+from fastapi import FastAPI, HTTPException
+from pydantic import BaseModel, EmailStr
+from typing import List, Optional
+import os
+import json
+from datetime import datetime
+from dotenv import load_dotenv
+from openai import OpenAI
+from google.auth.transport.requests import Request
+from google.oauth2.credentials import Credentials
+from google_auth_oauthlib.flow import InstalledAppFlow
+from googleapiclient.discovery import build
+from googleapiclient.errors import HttpError
+
+
 
 
 # ─── CONFIG ────────────────────────────────────────────────────────────────────
@@ -473,86 +489,86 @@ from datetime import datetime
 
 
 
-@app.post("/chat", response_model=ChatResponse)
-async def chat_endpoint(chat_request: ChatRequest):
-    try:
-        # Fetch session by session_id
-        session = await chat_sessions_collection.find_one({"session_id": chat_request.session_id})
-        if not session:
-            raise HTTPException(status_code=404, detail="Chat session not found")
+# @app.post("/chat", response_model=ChatResponse)
+# async def chat_endpoint(chat_request: ChatRequest):
+#     try:
+#         # Fetch session by session_id
+#         session = await chat_sessions_collection.find_one({"session_id": chat_request.session_id})
+#         if not session:
+#             raise HTTPException(status_code=404, detail="Chat session not found")
 
-        # Get user_id from request or session
-        user_id = chat_request.user_id or session.get("user_id")
-        if not user_id:
-            raise HTTPException(status_code=400, detail="User ID not found in session")
+#         # Get user_id from request or session
+#         user_id = chat_request.user_id or session.get("user_id")
+#         if not user_id:
+#             raise HTTPException(status_code=400, detail="User ID not found in session")
 
-        try:
-            user_id_obj = ObjectId(user_id)
-        except Exception:
-            raise HTTPException(status_code=400, detail="Invalid user_id format")
+#         try:
+#             user_id_obj = ObjectId(user_id)
+#         except Exception:
+#             raise HTTPException(status_code=400, detail="Invalid user_id format")
 
-        # Fetch user and business settings
-        user = await users_collection.find_one({"_id": user_id_obj})
-        if not user:
-            raise HTTPException(status_code=404, detail="User not found")
+#         # Fetch user and business settings
+#         user = await users_collection.find_one({"_id": user_id_obj})
+#         if not user:
+#             raise HTTPException(status_code=404, detail="User not found")
 
-        business_settings = await business_settings_collection.find_one({"user_id": user_id_obj})
-        if not business_settings:
-            raise HTTPException(status_code=404, detail="Business settings not found for the user")
+#         business_settings = await business_settings_collection.find_one({"user_id": user_id_obj})
+#         if not business_settings:
+#             raise HTTPException(status_code=404, detail="Business settings not found for the user")
 
-        # Format services info
-        services_info = []
-        for service in business_settings.get("services", []):
-            info = f"Service: {service['serviceName']}\nDescription: {service['description']}\n"
-            info += f"Price: ${service.get('price', 'Not specified')}\n"
+#         # Format services info
+#         services_info = []
+#         for service in business_settings.get("services", []):
+#             info = f"Service: {service['serviceName']}\nDescription: {service['description']}\n"
+#             info += f"Price: ${service.get('price', 'Not specified')}\n"
 
-            if service.get('working_hours'):
-                working_hours_info = ", ".join(
-                    f"{day}: {hours['start']} - {hours['end']}"
-                    for day, hours in service['working_hours'].items()
-                    if hours.get('active')
-                )
-                info += f"Working hours: {working_hours_info or 'Not specified'}\n"
+#             if service.get('working_hours'):
+#                 working_hours_info = ", ".join(
+#                     f"{day}: {hours['start']} - {hours['end']}"
+#                     for day, hours in service['working_hours'].items()
+#                     if hours.get('active')
+#                 )
+#                 info += f"Working hours: {working_hours_info or 'Not specified'}\n"
 
-            services_info.append(info)
+#             services_info.append(info)
 
-        services_details = "\n".join(services_info) if services_info else "No services available."
-        chat_tone = business_settings.get('chat_tone', 'default')
+#         services_details = "\n".join(services_info) if services_info else "No services available."
+#         chat_tone = business_settings.get('chat_tone', 'default')
 
-        system_message = (
-            f"The business offers the following services:\n{services_details}\n"
-            f"Please respond in a {chat_tone} tone."
-        )
+#         system_message = (
+#             f"The business offers the following services:\n{services_details}\n"
+#             f"Please respond in a {chat_tone} tone."
+#         )
 
-        # Generate AI response
-        response = get_chat_completion(chat_request.query, system_message)
+#         # Generate AI response
+#         response = get_chat_completion(chat_request.query, system_message)
 
-        # Log the message in session history
-        chat_doc = {
-            "query": chat_request.query,
-            "response": response,
-            "timestamp": datetime.utcnow()
-        }
+#         # Log the message in session history
+#         chat_doc = {
+#             "query": chat_request.query,
+#             "response": response,
+#             "timestamp": datetime.utcnow()
+#         }
 
-        await chat_sessions_collection.update_one(
-            {"session_id": chat_request.session_id},
-            {
-                "$push": {"messages": chat_doc},
-                "$set": {
-                    "last_activity": datetime.utcnow(),
-                    "user_id": user_id
-                }
-            }
-        )
+#         await chat_sessions_collection.update_one(
+#             {"session_id": chat_request.session_id},
+#             {
+#                 "$push": {"messages": chat_doc},
+#                 "$set": {
+#                     "last_activity": datetime.utcnow(),
+#                     "user_id": user_id
+#                 }
+#             }
+#         )
 
-        return ChatResponse(user_id=user_id, response=response)
+#         return ChatResponse(user_id=user_id, response=response)
 
-    except HTTPException as e:
-        print(f"HTTP error: {e.detail}")
-        raise e
-    except Exception as e:
-        print(f"Unexpected error: {str(e)}")
-        raise HTTPException(status_code=500, detail="Internal server error")
+#     except HTTPException as e:
+#         print(f"HTTP error: {e.detail}")
+#         raise e
+#     except Exception as e:
+#         print(f"Unexpected error: {str(e)}")
+#         raise HTTPException(status_code=500, detail="Internal server error")
 
 
 
@@ -587,3 +603,443 @@ async def get_chat_sessions(user_id: str):
         raise HTTPException(status_code=404, detail="No chat sessions found for this user.")
 
     return {"user_id": user_id, "chat_sessions": sessions}
+
+
+
+
+
+
+
+
+
+# load_dotenv()
+
+# # Initialize OpenAI
+# client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+
+# # Google Calendar setup
+# SCOPES = ['https://www.googleapis.com/auth/calendar.events']
+# CREDENTIALS_FILE = 'credentials.json'
+# TOKEN_FILE = 'token.json'
+
+# # System message for the AI
+# SYSTEM_MESSAGE = """
+# You are a scheduling assistant that helps users create calendar events.
+# When scheduling an event, always ask for:
+# 1. Date of the appointment
+# 2. Start and end times (e.g., 2 PM to 3 PM)
+# 3. The user's email address
+# 4. Optional: description of the appointment
+
+# If the user does not specify a title, use 'Service Appointment' as the default title.
+# Convert the provided date and time into ISO 8601 format for the calendar API.
+# """
+
+
+# class EventRequest(BaseModel):
+#     summary: str
+#     start_datetime: str
+#     end_datetime: str
+#     description: Optional[str] = None
+#     attendees: Optional[List[EmailStr]] = None
+#     reminders: Optional[dict] = None
+
+# class ChatRequest(BaseModel):
+#     user_query: str
+
+# class ChatResponse(BaseModel):
+#     reply: str
+#     event_details: Optional[dict] = None
+
+# def get_calendar_service():
+#     """Initialize and return Google Calendar service"""
+#     creds = None
+#     if os.path.exists(TOKEN_FILE):
+#         creds = Credentials.from_authorized_user_file(TOKEN_FILE, SCOPES)
+    
+#     if not creds or not creds.valid:
+#         if creds and creds.expired and creds.refresh_token:
+#             creds.refresh(Request())
+#         else:
+#             flow = InstalledAppFlow.from_client_secrets_file(CREDENTIALS_FILE, SCOPES)
+#             creds = flow.run_local_server(port=0)
+        
+#         with open(TOKEN_FILE, 'w') as token:
+#             token.write(creds.to_json())
+    
+#     return build('calendar', 'v3', credentials=creds)
+
+# def create_calendar_event(event: EventRequest):
+#     """Create event with attendees and Google Meet link"""
+#     service = get_calendar_service()
+
+#     attendees = [{'email': email} for email in event.attendees] if event.attendees else []
+
+#     reminders = event.reminders or {
+#         'useDefault': False,
+#         'overrides': [
+#             {'method': 'email', 'minutes': 24 * 60},
+#             {'method': 'popup', 'minutes': 10}
+#         ]
+#     }
+
+#     event_body = {
+#         'summary': event.summary,
+#         'description': event.description,
+#         'start': {
+#             'dateTime': event.start_datetime,
+#             'timeZone': 'UTC',
+#         },
+#         'end': {
+#             'dateTime': event.end_datetime,
+#             'timeZone': 'UTC',
+#         },
+#         'attendees': attendees,
+#         'reminders': reminders,
+#         'sendUpdates': 'all',
+#         'conferenceData': {
+#             'createRequest': {
+#                 'requestId': str(uuid.uuid4()),
+#                 'conferenceSolutionKey': {'type': 'hangoutsMeet'}
+#             }
+#         }
+#     }
+
+#     try:
+#         created_event = service.events().insert(
+#             calendarId='primary',
+#             body=event_body,
+#             conferenceDataVersion=1
+#         ).execute()
+
+#         meet_link = created_event.get('conferenceData', {}).get('entryPoints', [{}])[0].get('uri')
+
+#         return {
+#             "status": "success",
+#             "event_id": created_event.get('id'),
+#             "htmlLink": created_event.get('htmlLink'),
+#             "attendees": [a['email'] for a in created_event.get('attendees', [])],
+#             "meet_link": meet_link
+#         }
+
+#     except HttpError as error:
+#         return {
+#             "status": "error",
+#             "message": str(error)
+#         }
+
+
+# @app.post("/schedule", response_model=ChatResponse)
+# async def schedule_event(request: ChatRequest):
+#     """Endpoint that handles natural language scheduling requests"""
+#     try:
+#         response = client.chat.completions.create(
+#             model="gpt-3.5-turbo",
+#             messages=[
+#                 {"role": "system", "content": SYSTEM_MESSAGE},
+#                 {"role": "user", "content": request.user_query}
+#             ],
+#             tools=[{
+#                 "type": "function",
+#                 "function": {
+#                     "name": "create_calendar_event",
+#                     "description": "Create a calendar event with attendees",
+#                     "parameters": {
+#                         "type": "object",
+#                         "properties": {
+#                             "summary": {"type": "string"},
+#                             "start_datetime": {"type": "string"},
+#                             "end_datetime": {"type": "string"},
+#                             "description": {"type": "string"},
+#                             "attendees": {
+#                                 "type": "array",
+#                                 "items": {"type": "string", "format": "email"}
+#                             }
+#                         },
+#                         "required": ["summary", "start_datetime", "end_datetime"]
+#                     }
+#                 }
+#             }],
+#             tool_choice="auto"
+#         )
+
+#         message = response.choices[0].message
+
+#         if not message.tool_calls:
+#             return {"reply": message.content}
+
+#         tool_call = message.tool_calls[0]
+#         event_data = json.loads(tool_call.function.arguments)
+#         event_data['summary'] = event_data.get('summary') or "Service Appointment"
+
+#         event_result = create_calendar_event(EventRequest(**event_data))
+
+#         if event_result["status"] != "success":
+#             return {"reply": f"Error: {event_result.get('message', 'Failed to create event')}"}
+
+#         attendees = event_result.get('attendees', [])
+#         meet_link = event_result.get("meet_link")
+#         attendee_text = f" with {len(attendees)} attendees" if attendees else ""
+#         meet_info = f" Join via Meet: {meet_link}" if meet_link else ""
+
+#         return {
+#             "reply": f"Successfully scheduled '{event_data['summary']}'{attendee_text}.{meet_info} Event link: {event_result['htmlLink']}",
+#             "event_details": event_result
+#         }
+
+#     except Exception as e:
+#         raise HTTPException(status_code=500, detail=str(e))
+    
+    
+    
+    
+
+
+
+
+
+
+# new chat route
+
+import os
+import json
+import traceback
+from datetime import datetime
+from typing import List, Optional
+from fastapi import HTTPException
+from bson import ObjectId
+from pydantic import BaseModel, EmailStr
+from openai import OpenAI
+from google.oauth2.credentials import Credentials
+from google_auth_oauthlib.flow import InstalledAppFlow
+from googleapiclient.discovery import build
+from googleapiclient.errors import HttpError
+
+# Initialize clients
+client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+google_credentials_path = 'credentials.json'
+google_token_path = 'token.json'
+google_scopes = ['https://www.googleapis.com/auth/calendar.events']
+
+class EventRequest(BaseModel):
+    summary: str
+    start_datetime: str
+    end_datetime: str
+    description: Optional[str] = None
+    attendees: Optional[List[EmailStr]] = None
+
+class ChatRequest(BaseModel):
+    session_id: str
+    query: str
+    user_id: Optional[str] = None
+
+class ChatResponse(BaseModel):
+    user_id: str
+    response: str
+    event_details: Optional[dict] = None
+
+def get_calendar_service():
+    creds = None
+    if os.path.exists(google_token_path):
+        creds = Credentials.from_authorized_user_file(google_token_path, google_scopes)
+    
+    if not creds or not creds.valid:
+        if creds and creds.expired and creds.refresh_token:
+            creds.refresh(Request())
+        else:
+            flow = InstalledAppFlow.from_client_secrets_file(google_credentials_path, google_scopes)
+            creds = flow.run_local_server(port=0)
+        
+        with open(google_token_path, 'w') as token:
+            token.write(creds.to_json())
+    
+    return build('calendar', 'v3', credentials=creds)
+
+def create_calendar_event(event: EventRequest):
+    service = get_calendar_service()
+    
+    event_body = {
+        'summary': event.summary,
+        'description': event.description,
+        'start': {'dateTime': event.start_datetime, 'timeZone': 'UTC'},
+        'end': {'dateTime': event.end_datetime, 'timeZone': 'UTC'},
+        'attendees': [{'email': email} for email in event.attendees] if event.attendees else [],
+        'conferenceData': {
+            'createRequest': {
+                'requestId': str(uuid.uuid4()),
+                'conferenceSolutionKey': {'type': 'hangoutsMeet'}
+            }
+        }
+    }
+
+    try:
+        created_event = service.events().insert(
+            calendarId='primary',
+            body=event_body,
+            conferenceDataVersion=1
+        ).execute()
+
+        return {
+            "status": "success",
+            "event_id": created_event.get('id'),
+            "htmlLink": created_event.get('htmlLink'),
+            "meet_link": created_event.get('hangoutLink')
+        }
+    except HttpError as error:
+        return {"status": "error", "message": str(error)}
+
+async def detect_scheduling_intent(query: str) -> bool:
+    response = client.chat.completions.create(
+        model="gpt-3.5-turbo",
+        messages=[{
+            "role": "system",
+            "content": "Determine if the user wants to schedule something. Reply only 'yes' or 'no'."
+        }, {
+            "role": "user",
+            "content": query
+        }],
+        temperature=0
+    )
+    return response.choices[0].message.content.strip().lower() == 'yes'
+
+@app.post("/chat", response_model=ChatResponse)
+async def chat_endpoint(chat_request: ChatRequest):
+    try:
+        # Validate session and user
+        session = await chat_sessions_collection.find_one({"session_id": chat_request.session_id})
+        if not session:
+            raise HTTPException(status_code=404, detail="Session not found")
+        
+        user_id = chat_request.user_id or session.get("user_id")
+        if not user_id:
+            raise HTTPException(status_code=400, detail="User ID required")
+
+        user = await users_collection.find_one({"_id": ObjectId(user_id)})
+        if not user:
+            raise HTTPException(status_code=404, detail="User not found")
+
+        # Prepare system message with business info
+        business_settings = await business_settings_collection.find_one({"user_id": ObjectId(user_id)})
+        services_info = "\n".join(
+            f"Service: {s['serviceName']}\nDescription: {s['description']}\nPrice: {s.get('price', 'N/A')}"
+            for s in business_settings.get("services", [])
+        )
+        
+        system_message = f"""Business services:\n{services_info}
+Respond in {business_settings.get('chat_tone', 'professional')} tone.
+For appointments, collect:
+1. Date
+2. Start/end times
+3. Email address
+4. Description (optional)"""
+
+        # Determine intent and process
+        is_scheduling = await detect_scheduling_intent(chat_request.query)
+        
+        if is_scheduling:
+            # Scheduling flow
+            response = client.chat.completions.create(
+                model="gpt-3.5-turbo",
+                messages=[
+                    {"role": "system", "content": system_message},
+                    {"role": "user", "content": chat_request.query}
+                ],
+                tools=[{
+                    "type": "function",
+                    "function": {
+                        "name": "create_calendar_event",
+                        "description": "Schedule a calendar appointment",
+                        "parameters": {
+                            "type": "object",
+                            "properties": {
+                                "summary": {"type": "string"},
+                                "start_datetime": {"type": "string"},
+                                "end_datetime": {"type": "string"},
+                                "description": {"type": "string"},
+                                "attendees": {
+                                    "type": "array",
+                                    "items": {"type": "string", "format": "email"}
+                                }
+                            },
+                            "required": ["summary", "start_datetime", "end_datetime"]
+                        }
+                    }
+                }]
+            )
+
+            message = response.choices[0].message
+            if message.tool_calls:
+                event_data = json.loads(message.tool_calls[0].function.arguments)
+                event_data['summary'] = event_data.get('summary') or "Appointment"
+                if user.get('email'):
+                    event_data.setdefault('attendees', []).append(user['email'])
+                
+                event_result = create_calendar_event(EventRequest(**event_data))
+                if event_result["status"] == "success":
+                    response_text = (f"Scheduled: {event_data['summary']}\n"
+                                    f"Date: {event_data['start_datetime']}\n")
+                    if event_result.get('meet_link'):
+                        response_text += f"\nMeet link: {event_result['meet_link']}"
+                    
+                    return ChatResponse(
+                        user_id=user_id,
+                        response=response_text,
+                        event_details=event_result
+                    )
+                else:
+                    return ChatResponse(
+                        user_id=user_id,
+                        response=f"Failed to schedule: {event_result.get('message')}"
+                    )
+        
+        # Regular chat flow
+        chat_response = client.chat.completions.create(
+            model="gpt-3.5-turbo",
+            messages=[
+                {"role": "system", "content": system_message},
+                {"role": "user", "content": chat_request.query}
+            ]
+        ).choices[0].message.content
+
+        # Save to database
+        await chat_sessions_collection.update_one(
+            {"session_id": chat_request.session_id},
+            {
+                "$push": {
+                    "messages": {
+                        "query": chat_request.query,
+                        "response": chat_response,
+                        "timestamp": datetime.utcnow(),
+                        "is_scheduling": is_scheduling
+                    }
+                },
+                "$set": {"last_activity": datetime.utcnow()}
+            }
+        )
+
+
+        return ChatResponse(user_id=user_id, response=chat_response)
+
+    except Exception as e:
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
