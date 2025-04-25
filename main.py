@@ -43,6 +43,8 @@ from google.oauth2.credentials import Credentials
 from google_auth_oauthlib.flow import InstalledAppFlow
 from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
+from google.auth.transport.requests import Request  # ✅ Correct Request class
+from google.auth.transport.requests import Request as GoogleAuthRequest
 
 
 
@@ -528,6 +530,9 @@ from google.oauth2.credentials import Credentials
 from google_auth_oauthlib.flow import InstalledAppFlow
 from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
+from fastapi import Request as FastAPIRequest
+from google.auth.transport.requests import Request as GoogleAuthRequest
+
 
 # Initialize clients
 client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
@@ -559,7 +564,7 @@ def get_calendar_service():
     
     if not creds or not creds.valid:
         if creds and creds.expired and creds.refresh_token:
-            creds.refresh(Request())
+            creds.refresh(GoogleAuthRequest())
         else:
             flow = InstalledAppFlow.from_client_secrets_file(google_credentials_path, google_scopes)
             creds = flow.run_local_server(port=0)
