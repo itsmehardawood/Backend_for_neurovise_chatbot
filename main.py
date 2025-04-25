@@ -77,7 +77,7 @@ app.add_middleware(
 # business_settings_collection = db.service
 from motor.motor_asyncio import AsyncIOMotorClient
 import ssl
-
+MONGO_URI=os.getenv("MONGO_URI")
 
 client = AsyncIOMotorClient(
     MONGO_URI,
