@@ -15,6 +15,7 @@ class ChatResponse(BaseModel):
 class User(BaseModel):
     email: str
     password: str
+    phone: str
 
 class LoginResponse(BaseModel):
     access_token: str

@@ -90,6 +90,8 @@ users_collection = db.users
 business_settings_collection = db.services
 chat_history_collection = db.chat_history
 chat_sessions_collection = db.chat_sessions
+
+
 # ─── UTILS ─────────────────────────────────────────────────────────────────────
 def hash_password(password: str) -> str:
     return bcrypt.hashpw(password.encode(), bcrypt.gensalt()).decode()
@@ -114,9 +116,18 @@ oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/login")
 async def signup(user: User):
     if await users_collection.find_one({"email": user.email}):
         raise HTTPException(status_code=400, detail="Email already registered")
+    
+    if await users_collection.find_one({"phone_number": user.phone}):
+        raise HTTPException(status_code=400, detail="Phone number already registered")
+    
     hashed_pw = hash_password(user.password)
-    await users_collection.insert_one({"email": user.email, "password": hashed_pw})
+    await users_collection.insert_one({
+        "email": user.email,
+        "password": hashed_pw,
+        "phone_number": user.phone  # Store the phone number
+    })
     return {"message": "User registered successfully"}
+
 
 @app.post("/login", response_model=LoginResponse)
 async def login_for_access_token(form_data: OAuth2PasswordRequestForm = Depends()):
@@ -421,6 +432,19 @@ async def delete_service(service_id: str):
         raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
 
 
+
+
+
+
+
+
+
+
+
+
+
+
+
 from uuid import uuid4
 from datetime import datetime, timedelta
 from fastapi import FastAPI, HTTPException
@@ -433,6 +457,8 @@ class StartChatRequest(BaseModel):
     full_name: str
     email: EmailStr
     phone_number: str
+    user_id: Optional[str] = None  # Add this
+
 
 class StartChatResponse(BaseModel):
     session_id: str
@@ -448,7 +474,9 @@ async def start_chat(data: StartChatRequest):
         "phone_number": data.phone_number,
         "session_id": session_id,
         "created_at": datetime.utcnow(),
-        "messages": []
+        "messages": [],
+        "user_id": data.user_id  # <- Add this
+
     }
 
     await chat_sessions_collection.insert_one(new_chat_session)
@@ -487,326 +515,13 @@ from datetime import datetime
 
 
 
-
-
-# @app.post("/chat", response_model=ChatResponse)
-# async def chat_endpoint(chat_request: ChatRequest):
-#     try:
-#         # Fetch session by session_id
-#         session = await chat_sessions_collection.find_one({"session_id": chat_request.session_id})
-#         if not session:
-#             raise HTTPException(status_code=404, detail="Chat session not found")
-
-#         # Get user_id from request or session
-#         user_id = chat_request.user_id or session.get("user_id")
-#         if not user_id:
-#             raise HTTPException(status_code=400, detail="User ID not found in session")
-
-#         try:
-#             user_id_obj = ObjectId(user_id)
-#         except Exception:
-#             raise HTTPException(status_code=400, detail="Invalid user_id format")
-
-#         # Fetch user and business settings
-#         user = await users_collection.find_one({"_id": user_id_obj})
-#         if not user:
-#             raise HTTPException(status_code=404, detail="User not found")
-
-#         business_settings = await business_settings_collection.find_one({"user_id": user_id_obj})
-#         if not business_settings:
-#             raise HTTPException(status_code=404, detail="Business settings not found for the user")
-
-#         # Format services info
-#         services_info = []
-#         for service in business_settings.get("services", []):
-#             info = f"Service: {service['serviceName']}\nDescription: {service['description']}\n"
-#             info += f"Price: ${service.get('price', 'Not specified')}\n"
-
-#             if service.get('working_hours'):
-#                 working_hours_info = ", ".join(
-#                     f"{day}: {hours['start']} - {hours['end']}"
-#                     for day, hours in service['working_hours'].items()
-#                     if hours.get('active')
-#                 )
-#                 info += f"Working hours: {working_hours_info or 'Not specified'}\n"
-
-#             services_info.append(info)
-
-#         services_details = "\n".join(services_info) if services_info else "No services available."
-#         chat_tone = business_settings.get('chat_tone', 'default')
-
-#         system_message = (
-#             f"The business offers the following services:\n{services_details}\n"
-#             f"Please respond in a {chat_tone} tone."
-#         )
-
-#         # Generate AI response
-#         response = get_chat_completion(chat_request.query, system_message)
-
-#         # Log the message in session history
-#         chat_doc = {
-#             "query": chat_request.query,
-#             "response": response,
-#             "timestamp": datetime.utcnow()
-#         }
-
-#         await chat_sessions_collection.update_one(
-#             {"session_id": chat_request.session_id},
-#             {
-#                 "$push": {"messages": chat_doc},
-#                 "$set": {
-#                     "last_activity": datetime.utcnow(),
-#                     "user_id": user_id
-#                 }
-#             }
-#         )
-
-#         return ChatResponse(user_id=user_id, response=response)
-
-#     except HTTPException as e:
-#         print(f"HTTP error: {e.detail}")
-#         raise e
-#     except Exception as e:
-#         print(f"Unexpected error: {str(e)}")
-#         raise HTTPException(status_code=500, detail="Internal server error")
-
-
-
-
-# chat history 
-
-from typing import List , Any
-
-from fastapi import Query
-
-class ChatHistoryResponse(BaseModel):
-    full_name: str
-    email: EmailStr
-    phone_number: str
-    session_id: str
-    created_at: datetime
-    messages: List[Dict[str, Any]]
-    last_activity: Optional[datetime] = None
-    user_id: Optional[str] = None
-
-
-
-@app.get("/chat-sessions/{user_id}")
-async def get_chat_sessions(user_id: str):
-    sessions_cursor = chat_sessions_collection.find({"user_id": user_id})
-    sessions = []
-    async for session in sessions_cursor:
-        session["_id"] = str(session["_id"])  # convert ObjectId to string
-        sessions.append(session)
-
-    if not sessions:
-        raise HTTPException(status_code=404, detail="No chat sessions found for this user.")
-
-    return {"user_id": user_id, "chat_sessions": sessions}
-
-
-
-
-
-
-
-
-
-# load_dotenv()
-
-# # Initialize OpenAI
-# client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
-
-# # Google Calendar setup
-# SCOPES = ['https://www.googleapis.com/auth/calendar.events']
-# CREDENTIALS_FILE = 'credentials.json'
-# TOKEN_FILE = 'token.json'
-
-# # System message for the AI
-# SYSTEM_MESSAGE = """
-# You are a scheduling assistant that helps users create calendar events.
-# When scheduling an event, always ask for:
-# 1. Date of the appointment
-# 2. Start and end times (e.g., 2 PM to 3 PM)
-# 3. The user's email address
-# 4. Optional: description of the appointment
-
-# If the user does not specify a title, use 'Service Appointment' as the default title.
-# Convert the provided date and time into ISO 8601 format for the calendar API.
-# """
-
-
-# class EventRequest(BaseModel):
-#     summary: str
-#     start_datetime: str
-#     end_datetime: str
-#     description: Optional[str] = None
-#     attendees: Optional[List[EmailStr]] = None
-#     reminders: Optional[dict] = None
-
-# class ChatRequest(BaseModel):
-#     user_query: str
-
-# class ChatResponse(BaseModel):
-#     reply: str
-#     event_details: Optional[dict] = None
-
-# def get_calendar_service():
-#     """Initialize and return Google Calendar service"""
-#     creds = None
-#     if os.path.exists(TOKEN_FILE):
-#         creds = Credentials.from_authorized_user_file(TOKEN_FILE, SCOPES)
-    
-#     if not creds or not creds.valid:
-#         if creds and creds.expired and creds.refresh_token:
-#             creds.refresh(Request())
-#         else:
-#             flow = InstalledAppFlow.from_client_secrets_file(CREDENTIALS_FILE, SCOPES)
-#             creds = flow.run_local_server(port=0)
-        
-#         with open(TOKEN_FILE, 'w') as token:
-#             token.write(creds.to_json())
-    
-#     return build('calendar', 'v3', credentials=creds)
-
-# def create_calendar_event(event: EventRequest):
-#     """Create event with attendees and Google Meet link"""
-#     service = get_calendar_service()
-
-#     attendees = [{'email': email} for email in event.attendees] if event.attendees else []
-
-#     reminders = event.reminders or {
-#         'useDefault': False,
-#         'overrides': [
-#             {'method': 'email', 'minutes': 24 * 60},
-#             {'method': 'popup', 'minutes': 10}
-#         ]
-#     }
-
-#     event_body = {
-#         'summary': event.summary,
-#         'description': event.description,
-#         'start': {
-#             'dateTime': event.start_datetime,
-#             'timeZone': 'UTC',
-#         },
-#         'end': {
-#             'dateTime': event.end_datetime,
-#             'timeZone': 'UTC',
-#         },
-#         'attendees': attendees,
-#         'reminders': reminders,
-#         'sendUpdates': 'all',
-#         'conferenceData': {
-#             'createRequest': {
-#                 'requestId': str(uuid.uuid4()),
-#                 'conferenceSolutionKey': {'type': 'hangoutsMeet'}
-#             }
-#         }
-#     }
-
-#     try:
-#         created_event = service.events().insert(
-#             calendarId='primary',
-#             body=event_body,
-#             conferenceDataVersion=1
-#         ).execute()
-
-#         meet_link = created_event.get('conferenceData', {}).get('entryPoints', [{}])[0].get('uri')
-
-#         return {
-#             "status": "success",
-#             "event_id": created_event.get('id'),
-#             "htmlLink": created_event.get('htmlLink'),
-#             "attendees": [a['email'] for a in created_event.get('attendees', [])],
-#             "meet_link": meet_link
-#         }
-
-#     except HttpError as error:
-#         return {
-#             "status": "error",
-#             "message": str(error)
-#         }
-
-
-# @app.post("/schedule", response_model=ChatResponse)
-# async def schedule_event(request: ChatRequest):
-#     """Endpoint that handles natural language scheduling requests"""
-#     try:
-#         response = client.chat.completions.create(
-#             model="gpt-3.5-turbo",
-#             messages=[
-#                 {"role": "system", "content": SYSTEM_MESSAGE},
-#                 {"role": "user", "content": request.user_query}
-#             ],
-#             tools=[{
-#                 "type": "function",
-#                 "function": {
-#                     "name": "create_calendar_event",
-#                     "description": "Create a calendar event with attendees",
-#                     "parameters": {
-#                         "type": "object",
-#                         "properties": {
-#                             "summary": {"type": "string"},
-#                             "start_datetime": {"type": "string"},
-#                             "end_datetime": {"type": "string"},
-#                             "description": {"type": "string"},
-#                             "attendees": {
-#                                 "type": "array",
-#                                 "items": {"type": "string", "format": "email"}
-#                             }
-#                         },
-#                         "required": ["summary", "start_datetime", "end_datetime"]
-#                     }
-#                 }
-#             }],
-#             tool_choice="auto"
-#         )
-
-#         message = response.choices[0].message
-
-#         if not message.tool_calls:
-#             return {"reply": message.content}
-
-#         tool_call = message.tool_calls[0]
-#         event_data = json.loads(tool_call.function.arguments)
-#         event_data['summary'] = event_data.get('summary') or "Service Appointment"
-
-#         event_result = create_calendar_event(EventRequest(**event_data))
-
-#         if event_result["status"] != "success":
-#             return {"reply": f"Error: {event_result.get('message', 'Failed to create event')}"}
-
-#         attendees = event_result.get('attendees', [])
-#         meet_link = event_result.get("meet_link")
-#         attendee_text = f" with {len(attendees)} attendees" if attendees else ""
-#         meet_info = f" Join via Meet: {meet_link}" if meet_link else ""
-
-#         return {
-#             "reply": f"Successfully scheduled '{event_data['summary']}'{attendee_text}.{meet_info} Event link: {event_result['htmlLink']}",
-#             "event_details": event_result
-#         }
-
-#     except Exception as e:
-#         raise HTTPException(status_code=500, detail=str(e))
-    
-    
-    
-    
-
-
-
-
-
-
-# new chat route
-
 import os
 import json
+import uuid
 import traceback
 from datetime import datetime
 from typing import List, Optional
-from fastapi import HTTPException
+from fastapi import HTTPException, Request
 from bson import ObjectId
 from pydantic import BaseModel, EmailStr
 from openai import OpenAI
@@ -902,6 +617,32 @@ async def detect_scheduling_intent(query: str) -> bool:
     )
     return response.choices[0].message.content.strip().lower() == 'yes'
 
+async def save_chat_to_db(session_id: str, query: str, response: str, is_scheduling: bool, event_details: Optional[dict] = None):
+    """Helper function to save chat history to database"""
+    try:
+        update_data = {
+            "$push": {
+                "messages": {
+                    "query": query,
+                    "response": response,
+                    "timestamp": datetime.utcnow(),
+                    "is_scheduling": is_scheduling
+                }
+            },
+            "$set": {"last_activity": datetime.utcnow()}
+        }
+        
+        if event_details:
+            update_data["$push"]["messages"]["event_details"] = event_details
+        
+        await chat_sessions_collection.update_one(
+            {"session_id": session_id},
+            update_data
+        )
+    except Exception as e:
+        print(f"Failed to save chat to database: {str(e)}")
+        traceback.print_exc()
+
 @app.post("/chat", response_model=ChatResponse)
 async def chat_endpoint(chat_request: ChatRequest):
     try:
@@ -975,11 +716,21 @@ For appointments, collect:
                     event_data.setdefault('attendees', []).append(user['email'])
                 
                 event_result = create_calendar_event(EventRequest(**event_data))
+                
                 if event_result["status"] == "success":
                     response_text = (f"Scheduled: {event_data['summary']}\n"
                                     f"Date: {event_data['start_datetime']}\n")
                     if event_result.get('meet_link'):
                         response_text += f"\nMeet link: {event_result['meet_link']}"
+                    
+                    # Save to database before returning
+                    await save_chat_to_db(
+                        session_id=chat_request.session_id,
+                        query=chat_request.query,
+                        response=response_text,
+                        is_scheduling=True,
+                        event_details=event_result
+                    )
                     
                     return ChatResponse(
                         user_id=user_id,
@@ -987,9 +738,16 @@ For appointments, collect:
                         event_details=event_result
                     )
                 else:
+                    error_response = f"Failed to schedule: {event_result.get('message')}"
+                    await save_chat_to_db(
+                        session_id=chat_request.session_id,
+                        query=chat_request.query,
+                        response=error_response,
+                        is_scheduling=True
+                    )
                     return ChatResponse(
                         user_id=user_id,
-                        response=f"Failed to schedule: {event_result.get('message')}"
+                        response=error_response
                     )
         
         # Regular chat flow
@@ -1002,21 +760,12 @@ For appointments, collect:
         ).choices[0].message.content
 
         # Save to database
-        await chat_sessions_collection.update_one(
-            {"session_id": chat_request.session_id},
-            {
-                "$push": {
-                    "messages": {
-                        "query": chat_request.query,
-                        "response": chat_response,
-                        "timestamp": datetime.utcnow(),
-                        "is_scheduling": is_scheduling
-                    }
-                },
-                "$set": {"last_activity": datetime.utcnow()}
-            }
+        await save_chat_to_db(
+            session_id=chat_request.session_id,
+            query=chat_request.query,
+            response=chat_response,
+            is_scheduling=is_scheduling
         )
-
 
         return ChatResponse(user_id=user_id, response=chat_response)
 
@@ -1034,12 +783,33 @@ For appointments, collect:
 
 
 
+# chat history 
+
+from typing import List , Any
+
+from fastapi import Query
+
+class ChatHistoryResponse(BaseModel):
+    full_name: str
+    email: EmailStr
+    phone_number: str
+    session_id: str
+    created_at: datetime
+    messages: List[Dict[str, Any]]
+    last_activity: Optional[datetime] = None
+    user_id: Optional[str] = None
 
 
 
+@app.get("/chat-sessions/{user_id}")
+async def get_chat_sessions(user_id: str):
+    sessions_cursor = chat_sessions_collection.find({"user_id": user_id})
+    sessions = []
+    async for session in sessions_cursor:
+        session["_id"] = str(session["_id"])  # convert ObjectId to string
+        sessions.append(session)
 
+    if not sessions:
+        raise HTTPException(status_code=404, detail="No chat sessions found for this user.")
 
-
-
-
-
+    return {"user_id": user_id, "chat_sessions": sessions}
