@@ -805,15 +805,60 @@ class ChatHistoryResponse(BaseModel):
 
 
 
+# @app.get("/chat-sessions/{user_id}")
+# async def get_chat_sessions(user_id: str):
+#     sessions_cursor = chat_sessions_collection.find({"user_id": user_id})
+#     sessions = []
+#     async for session in sessions_cursor:
+#         session["_id"] = str(session["_id"])  # convert ObjectId to string
+#         sessions.append(session)
+
+#     if not sessions:
+#         raise HTTPException(status_code=404, detail="No chat sessions found for this user.")
+
+#     return {"user_id": user_id, "chat_sessions": sessions}
+
+
+from fastapi import HTTPException
+from bson import ObjectId
+chat_history_collection = db.chat_history
+
+
+
 @app.get("/chat-sessions/{user_id}")
 async def get_chat_sessions(user_id: str):
+    # 1. Fetch regular chat sessions
     sessions_cursor = chat_sessions_collection.find({"user_id": user_id})
     sessions = []
     async for session in sessions_cursor:
-        session["_id"] = str(session["_id"])  # convert ObjectId to string
+        session["_id"] = str(session["_id"])
         sessions.append(session)
-
+    # 2. Fetch WhatsApp chat history
+    whatsapp_chat = await chat_history_collection.find_one({"user_id": user_id})
+    whatsapp_session = None
+    if whatsapp_chat and whatsapp_chat.get("messages"):
+        whatsapp_session = {
+            "_id": str(whatsapp_chat["_id"]),
+            "session_id": "whatsapp_chat",
+            "full_name": whatsapp_chat.get("name", "WhatsApp User"),
+            "email": whatsapp_chat.get("email", ""),
+            "phone_number": whatsapp_chat.get("phone_number", ""),
+            "created_at": whatsapp_chat["messages"][0]["timestamp"] if whatsapp_chat["messages"] else None,
+            "messages": [
+                {
+                    "query": msg.get("user_message", ""),
+                    "response": msg.get("assistant_reply", ""),
+                    "timestamp": msg.get("timestamp", None)
+                }
+                for msg in whatsapp_chat["messages"]
+            ]
+        }
+        sessions.append(whatsapp_session)
+    # 3. Raise 404 only if both are missing
     if not sessions:
-        raise HTTPException(status_code=404, detail="No chat sessions found for this user.")
-
-    return {"user_id": user_id, "chat_sessions": sessions}
+        raise HTTPException(status_code=404, detail="No chat sessions or WhatsApp chat history found for this user.")
+    # 4. Return unified session list
+    return {
+        "user_id": user_id,
+        "chat_sessions": sessions
+    }
