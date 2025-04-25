@@ -66,7 +66,6 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
-MONGO_URI = os.getenv("MONGO_URI")
 # DB_NAME=os.getenv("DB_NAME")
 # users_collection= os.getenv("USERS_COLLECTION")
 # services_collection= os.getenv("SERVICES_COLLECTION")
