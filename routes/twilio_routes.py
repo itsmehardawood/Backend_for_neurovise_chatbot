@@ -19,42 +19,40 @@ db = client.Echo_db
 users_collection = db.users
 business_settings_collection = db.services
 chat_history_collection = db.chat_history
-chat_sessions_collection = db.chat_sessions
 
 @twilio_router.post("/twilio/whatsapp")
 async def whatsapp_webhook(
     request: Request,
     Body: str = Form(...),
-    From: str = Form(...)
+    From: str = Form(...),
+    To: str = Form(...)
 ):
-    # Normalize phone number
-    phone_number = From.replace("whatsapp:", "").replace("+", "").strip()
-    print(f"[DEBUG] Looking for number: {repr(phone_number)}")
+    # Normalize customer phone number and Twilio (owner) phone number
+    customer_number = From.replace("whatsapp:", "").replace("+", "").strip()
+    owner_number = To.replace("whatsapp:", "").replace("+", "").strip()
 
-    # Find the user
-    user = users_collection.find_one({"phone_number": phone_number})
-    if not user:
-        print(f"[DEBUG] No matching user found for phone number: {phone_number}")
+    print(f"[DEBUG] Customer: {customer_number}, Owner (Twilio): {owner_number}")
+
+    # Find the owner user by Twilio number
+    owner_user = users_collection.find_one({"phone_number": owner_number})
+    if not owner_user:
+        print(f"[DEBUG] No matching business user found for owner number: {owner_number}")
         return Response(status_code=200)
 
-    user_id = str(user["_id"])
-    print("user id", user_id)
-    email = user.get("email", "unknown")
-    name = user.get("name", "WhatsApp user")
+    owner_user_id = str(owner_user["_id"])
 
-    # Find business settings
-    business_settings = business_settings_collection.find_one({"user_id": ObjectId(user_id)})
+    # Find business settings by owner user_id
+    business_settings = business_settings_collection.find_one({"user_id": ObjectId(owner_user_id)})
     if not business_settings:
-        print(f"[DEBUG] No business settings found for user {user_id}")
+        print(f"[DEBUG] No business settings found for owner user {owner_user_id}")
         return Response(status_code=200)
 
-    # Format services info
+    # Prepare services info for system prompt
     services_info = "\n".join(
         f"Service: {s['serviceName']}\nDescription: {s['description']}\nPrice: {s.get('price', 'N/A')}"
         for s in business_settings.get("services", [])
     )
 
-    # Create dynamic system message
     system_message = f"""Business services:\n{services_info}
 Respond in {business_settings.get('chat_tone', 'professional')} tone.
 If the user wants to book an appointment, ask for:
@@ -64,32 +62,48 @@ If the user wants to book an appointment, ask for:
 4. Description (optional)"""
 
     # Generate chatbot reply
-    reply = get_chat_completion(Body, system_message)
+    assistant_reply = get_chat_completion(Body, system_message)
 
-    # Store chat history
-    message_entry = {
-        "timestamp": datetime.datetime.utcnow(),
-        "user_message": Body,
-        "assistant_reply": reply
+    # Prepare chat history structure
+    chat_history_entry = {
+        "customer_number": customer_number,
+        "owner_number": owner_number,
+        "name": "WhatsApp user",  # Default name
+        "owner_user_id": owner_user_id,
+        "messages": [
+            {
+                "timestamp": datetime.datetime.utcnow(),
+                "query": Body,
+                "response": assistant_reply
+            }
+        ]
     }
 
+    # Upsert chat history
     chat_history_collection.update_one(
-        {"user_id": user_id},
+        {
+            "customer_number": customer_number,
+            "owner_number": owner_number
+        },
         {
             "$setOnInsert": {
-                "user_id": user_id,
-                "name": name,
-                "email": email,
-                "phone_number": phone_number
+                "customer_number": customer_number,
+                "owner_number": owner_number,
+                "name": "WhatsApp user",
+                "owner_user_id": owner_user_id
             },
             "$push": {
-                "messages": message_entry
+                "messages": {
+                    "timestamp": datetime.datetime.utcnow(),
+                    "query": Body,
+                    "response": assistant_reply
+                }
             }
         },
         upsert=True
     )
 
-    # Send Twilio WhatsApp reply
+    # Send reply
     twilio_response = MessagingResponse()
-    twilio_response.message(reply)
+    twilio_response.message(assistant_reply)
     return Response(content=str(twilio_response), media_type="application/xml")

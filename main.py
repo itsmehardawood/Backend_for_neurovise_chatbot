@@ -803,7 +803,9 @@ class ChatHistoryResponse(BaseModel):
     last_activity: Optional[datetime] = None
     user_id: Optional[str] = None
 
-
+from fastapi import HTTPException
+from bson import ObjectId
+chat_history_collection = db.chat_history
 
 # @app.get("/chat-sessions/{user_id}")
 # async def get_chat_sessions(user_id: str):
@@ -854,11 +856,27 @@ async def get_chat_sessions(user_id: str):
             ]
         }
         sessions.append(whatsapp_session)
+
     # 3. Raise 404 only if both are missing
     if not sessions:
         raise HTTPException(status_code=404, detail="No chat sessions or WhatsApp chat history found for this user.")
+
     # 4. Return unified session list
     return {
         "user_id": user_id,
         "chat_sessions": sessions
     }
+
+
+# @app.get("/chat-sessions/{user_id}")
+# async def get_chat_sessions(user_id: str):
+#     sessions_cursor = chat_sessions_collection.find({"user_id": user_id})
+#     sessions = []
+#     async for session in sessions_cursor:
+#         session["_id"] = str(session["_id"])  # convert ObjectId to string
+#         sessions.append(session)
+
+#     if not sessions:
+#         raise HTTPException(status_code=404, detail="No chat sessions found for this user.")
+
+#     return {"user_id": user_id, "chat_sessions": sessions}
