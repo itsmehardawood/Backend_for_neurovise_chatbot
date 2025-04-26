@@ -827,8 +827,9 @@ async def get_chat_sessions(user_id: str):
         whatsapp_session = {
             "_id": str(whatsapp_chat["_id"]),
             "session_id": "whatsapp_chat_" + whatsapp_chat.get("customer_number", "unknown"),
-            "customer_number": whatsapp_chat.get("customer_number", ""),
-            "owner_number": whatsapp_chat.get("owner_number", ""),
+            "phone_number": whatsapp_chat.get("customer_number", ""),
+            "email": whatsapp_chat.get("email", "None"),
+            "full_name": whatsapp_chat.get("name", "WhatsApp User"),
             "created_at": whatsapp_chat["messages"][0]["timestamp"] if whatsapp_chat.get("messages") else None,
             "messages": [
                 {
