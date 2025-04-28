@@ -56,3 +56,4 @@ class ServiceUpdate(BaseModel):
 class BusinessSettings(BaseModel):
     services: List[Service]
     chat_tone: str  # Removed the top-level working_hours field here
+    system_prompt: Optional[str] = None  # <--- ADD THIS

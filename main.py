@@ -181,14 +181,13 @@ async def save_business_settings(
         new_services_serialized = [
             {
                 **service.dict(exclude={"working_hours"}),
-                 "price": f"{service.price:.2f}",  # Properly formatted as string
+                "price": f"{service.price:.2f}",  # Properly formatted as string
                 "working_hours": {
                     day: vars(hours) for day, hours in service.working_hours.items()
                 } if service.working_hours else None,
             }
             for service in settings.services
         ]
-
 
         # Fetch existing settings
         existing_settings = await business_settings_collection.find_one(
@@ -199,13 +198,14 @@ async def save_business_settings(
         existing_services = existing_settings.get("services", []) if existing_settings else []
         combined_services = existing_services + new_services_serialized
 
-        # Update document with combined services
+        # Update document with combined services, chat_tone, and system_prompt
         result = await business_settings_collection.update_one(
             {"user_id": current_user["_id"]},
             {
                 "$set": {
                     "services": combined_services,
                     "chat_tone": settings.chat_tone,
+                    "system_prompt": settings.system_prompt
                 }
             },
             upsert=True,
@@ -256,7 +256,7 @@ async def get_service(service_id: str):
             query = {"services.id": service_id}
         
         # Search for business settings containing the service
-        business_settings = await business_settings_collection.find_one(query)
+        business_settings = await business_settings_collection.find_one(query, {"_id": 0})  # Exclude _id from the result
         if not business_settings:
             raise HTTPException(status_code=404, detail="Service not found")
         
@@ -275,6 +275,9 @@ async def get_service(service_id: str):
         working_hours = service.get("working_hours", {})
         if not isinstance(working_hours, dict):
             working_hours = {}
+        
+        # Retrieve the system_prompt for this business
+        system_prompt = business_settings.get("system_prompt", None)
         
         # Convert price from string to Decimal if needed
         price = service["price"]
@@ -299,7 +302,8 @@ async def get_service(service_id: str):
                     "active": hours.get("active", False)
                 }
                 for day, hours in working_hours.items()
-            }
+            },
+            "system_prompt": system_prompt  # Include the system prompt
         }
         
     except HTTPException:
@@ -308,6 +312,7 @@ async def get_service(service_id: str):
         raise HTTPException(status_code=400, detail="Invalid service ID format")
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
+
 
 
 # put for edit each service 
@@ -609,7 +614,7 @@ def create_calendar_event(event: EventRequest):
 
 async def detect_scheduling_intent(query: str) -> bool:
     response = client.chat.completions.create(
-        model="gpt-3.5-turbo",
+        model="gpt-4-turbo",
         messages=[{
             "role": "system",
             "content": "Determine if the user wants to schedule something. Reply only 'yes' or 'no'."
@@ -647,6 +652,140 @@ async def save_chat_to_db(session_id: str, query: str, response: str, is_schedul
         print(f"Failed to save chat to database: {str(e)}")
         traceback.print_exc()
 
+
+# @app.post("/chat", response_model=ChatResponse)
+# async def chat_endpoint(chat_request: ChatRequest):
+#     try:
+#         # Validate session and user
+#         session = await chat_sessions_collection.find_one({"session_id": chat_request.session_id})
+#         if not session:
+#             raise HTTPException(status_code=404, detail="Session not found")
+        
+#         user_id = chat_request.user_id or session.get("user_id")
+#         if not user_id:
+#             raise HTTPException(status_code=400, detail="User ID required")
+
+#         user = await users_collection.find_one({"_id": ObjectId(user_id)})
+#         if not user:
+#             raise HTTPException(status_code=404, detail="User not found")
+
+#         # Prepare system message with business info
+#         business_settings = await business_settings_collection.find_one({"user_id": ObjectId(user_id)})
+#         services_info = "\n".join(
+#             f"Service: {s['serviceName']}\nDescription: {s['description']}\nPrice: {s.get('price', 'N/A')}"
+#             for s in business_settings.get("services", [])
+#         )
+        
+#         system_message = f"""Business services:\n{services_info}
+# Respond in {business_settings.get('chat_tone', 'professional')} tone.
+# For appointments, collect:
+# 1. Date
+# 2. Start/end times
+# 3. Email address
+# 4. Description (optional)"""
+
+#         # Determine intent and process
+#         is_scheduling = await detect_scheduling_intent(chat_request.query)
+        
+#         if is_scheduling:
+#             # Scheduling flow
+#             response = client.chat.completions.create(
+#                 model="gpt-4-turbo",
+#                 messages=[
+#                     {"role": "system", "content": system_message},
+#                     {"role": "user", "content": chat_request.query}
+#                 ],
+#                 tools=[{
+#                     "type": "function",
+#                     "function": {
+#                         "name": "create_calendar_event",
+#                         "description": "Schedule a calendar appointment",
+#                         "parameters": {
+#                             "type": "object",
+#                             "properties": {
+#                                 "summary": {"type": "string"},
+#                                 "start_datetime": {"type": "string"},
+#                                 "end_datetime": {"type": "string"},
+#                                 "description": {"type": "string"},
+#                                 "attendees": {
+#                                     "type": "array",
+#                                     "items": {"type": "string", "format": "email"}
+#                                 }
+#                             },
+#                             "required": ["summary", "start_datetime", "end_datetime"]
+#                         }
+#                     }
+#                 }]
+#             )
+
+#             message = response.choices[0].message
+#             if message.tool_calls:
+#                 event_data = json.loads(message.tool_calls[0].function.arguments)
+#                 event_data['summary'] = event_data.get('summary') or "Appointment"
+#                 if user.get('email'):
+#                     event_data.setdefault('attendees', []).append(user['email'])
+                
+#                 event_result = create_calendar_event(EventRequest(**event_data))
+                
+#                 if event_result["status"] == "success":
+#                     response_text = (f"Scheduled: {event_data['summary']}\n"
+#                                     f"Date: {event_data['start_datetime']}\n")
+#                     if event_result.get('meet_link'):
+#                         response_text += f"\nMeet link: {event_result['meet_link']}"
+                    
+#                     # Save to database before returning
+#                     await save_chat_to_db(
+#                         session_id=chat_request.session_id,
+#                         query=chat_request.query,
+#                         response=response_text,
+#                         is_scheduling=True,
+#                         event_details=event_result
+#                     )
+                    
+#                     return ChatResponse(
+#                         user_id=user_id,
+#                         response=response_text,
+#                         event_details=event_result
+#                     )
+#                 else:
+#                     error_response = f"Failed to schedule: {event_result.get('message')}"
+#                     await save_chat_to_db(
+#                         session_id=chat_request.session_id,
+#                         query=chat_request.query,
+#                         response=error_response,
+#                         is_scheduling=True
+#                     )
+#                     return ChatResponse(
+#                         user_id=user_id,
+#                         response=error_response
+#                     )
+        
+#         # Regular chat flow
+#         chat_response = client.chat.completions.create(
+#             model="gpt-4-turbo",
+#             messages=[
+#                 {"role": "system", "content": system_message},
+#                 {"role": "user", "content": chat_request.query}
+#             ]
+#         ).choices[0].message.content
+
+#         # Save to database
+#         await save_chat_to_db(
+#             session_id=chat_request.session_id,
+#             query=chat_request.query,
+#             response=chat_response,
+#             is_scheduling=is_scheduling
+#         )
+
+#         return ChatResponse(user_id=user_id, response=chat_response)
+
+#     except Exception as e:
+#         traceback.print_exc()
+#         raise HTTPException(status_code=500, detail=str(e))
+
+
+
+
 @app.post("/chat", response_model=ChatResponse)
 async def chat_endpoint(chat_request: ChatRequest):
     try:
@@ -663,28 +802,44 @@ async def chat_endpoint(chat_request: ChatRequest):
         if not user:
             raise HTTPException(status_code=404, detail="User not found")
 
-        # Prepare system message with business info
+        # Get business settings
         business_settings = await business_settings_collection.find_one({"user_id": ObjectId(user_id)})
-        services_info = "\n".join(
-            f"Service: {s['serviceName']}\nDescription: {s['description']}\nPrice: {s.get('price', 'N/A')}"
-            for s in business_settings.get("services", [])
-        )
         
-        system_message = f"""Business services:\n{services_info}
-Respond in {business_settings.get('chat_tone', 'professional')} tone.
-For appointments, collect:
-1. Date
-2. Start/end times
-3. Email address
-4. Description (optional)"""
+        # Prepare system message - prioritize business settings
+        if business_settings:
+            # Start with the custom system prompt if available
+            system_message = business_settings.get('system_prompt', '')
+            
+            # Add services information if services exist
+            if business_settings.get('services'):
+                services_info = "\n".join(
+                    f"Service: {s['serviceName']}\nDescription: {s['description']}\nPrice: {s.get('price', 'N/A')}"
+                    for s in business_settings['services']
+                )
+                system_message = f"Available Services:\n{services_info}\n\n{system_message}"
+            
+            # Add tone instruction
+            tone = business_settings.get('chat_tone', 'professional')
+            system_message = f"{system_message}\n\nRespond in a {tone} tone."
+        else:
+            # Default system message when no business settings exist
+            system_message = """You are a helpful assistant. For appointment scheduling, please collect:
+1. Preferred date
+2. Preferred time
+3. Contact email
+4. Service interested in
+5. Any special requests
 
+Respond in a professional tone."""
+
+        # [Rest of your existing code remains the same...]
         # Determine intent and process
         is_scheduling = await detect_scheduling_intent(chat_request.query)
         
         if is_scheduling:
             # Scheduling flow
             response = client.chat.completions.create(
-                model="gpt-3.5-turbo",
+                model="gpt-4-turbo",
                 messages=[
                     {"role": "system", "content": system_message},
                     {"role": "user", "content": chat_request.query}
@@ -756,7 +911,7 @@ For appointments, collect:
         
         # Regular chat flow
         chat_response = client.chat.completions.create(
-            model="gpt-3.5-turbo",
+            model="gpt-4-turbo",
             messages=[
                 {"role": "system", "content": system_message},
                 {"role": "user", "content": chat_request.query}
@@ -776,7 +931,6 @@ For appointments, collect:
     except Exception as e:
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=str(e))
-
 
 
 
@@ -853,56 +1007,6 @@ async def get_chat_sessions(user_id: str):
     }
 
 
-# @app.get("/chat-sessions/{user_id}")
-# async def get_chat_sessions(user_id: str):
-#     # 1. Fetch regular chat sessions
-#     sessions_cursor = chat_sessions_collection.find({"user_id": user_id})
-#     sessions = []
-#     async for session in sessions_cursor:
-#         session["_id"] = str(session["_id"])
-#         sessions.append(session)
-#     # 2. Fetch WhatsApp chat history
-#     whatsapp_chat = await chat_history_collection.find_one({"user_id": user_id})
-#     whatsapp_session = None
-#     if whatsapp_chat and whatsapp_chat.get("messages"):
-#         whatsapp_session = {
-#             "_id": str(whatsapp_chat["_id"]),
-#             "session_id": "whatsapp_chat",
-#             "full_name": whatsapp_chat.get("name", "WhatsApp User"),
-#             "email": whatsapp_chat.get("email", ""),
-#             "phone_number": whatsapp_chat.get("phone_number", ""),
-#             "created_at": whatsapp_chat["messages"][0]["timestamp"] if whatsapp_chat["messages"] else None,
-#             "messages": [
-#                 {
-#                     "query": msg.get("user_message", ""),
-#                     "response": msg.get("assistant_reply", ""),
-#                     "timestamp": msg.get("timestamp", None)
-#                 }
-#                 for msg in whatsapp_chat["messages"]
-#             ]
-#         }
-#         sessions.append(whatsapp_session)
-
-#     # 3. Raise 404 only if both are missing
-#     if not sessions:
-#         raise HTTPException(status_code=404, detail="No chat sessions or WhatsApp chat history found for this user.")
-
-#     # 4. Return unified session list
-#     return {
-#         "user_id": user_id,
-#         "chat_sessions": sessions
-#     }
 
 
-# @app.get("/chat-sessions/{user_id}")
-# async def get_chat_sessions(user_id: str):
-#     sessions_cursor = chat_sessions_collection.find({"user_id": user_id})
-#     sessions = []
-#     async for session in sessions_cursor:
-#         session["_id"] = str(session["_id"])  # convert ObjectId to string
-#         sessions.append(session)
 
-#     if not sessions:
-#         raise HTTPException(status_code=404, detail="No chat sessions found for this user.")
-
-#     return {"user_id": user_id, "chat_sessions": sessions}
