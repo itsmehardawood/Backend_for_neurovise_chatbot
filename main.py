@@ -205,7 +205,6 @@ async def save_business_settings(
                 "$set": {
                     "services": combined_services,
                     "chat_tone": settings.chat_tone,
-                    "system_prompt": settings.system_prompt
                 }
             },
             upsert=True,
@@ -219,6 +218,14 @@ async def save_business_settings(
     except Exception as e:
         print(f"Error: {e}")
         raise HTTPException(status_code=500, detail=f"Internal Server Error: {e}")
+
+
+
+
+
+
+
+
 
 
 # get of services 
@@ -653,136 +660,6 @@ async def save_chat_to_db(session_id: str, query: str, response: str, is_schedul
         traceback.print_exc()
 
 
-# @app.post("/chat", response_model=ChatResponse)
-# async def chat_endpoint(chat_request: ChatRequest):
-#     try:
-#         # Validate session and user
-#         session = await chat_sessions_collection.find_one({"session_id": chat_request.session_id})
-#         if not session:
-#             raise HTTPException(status_code=404, detail="Session not found")
-        
-#         user_id = chat_request.user_id or session.get("user_id")
-#         if not user_id:
-#             raise HTTPException(status_code=400, detail="User ID required")
-
-#         user = await users_collection.find_one({"_id": ObjectId(user_id)})
-#         if not user:
-#             raise HTTPException(status_code=404, detail="User not found")
-
-#         # Prepare system message with business info
-#         business_settings = await business_settings_collection.find_one({"user_id": ObjectId(user_id)})
-#         services_info = "\n".join(
-#             f"Service: {s['serviceName']}\nDescription: {s['description']}\nPrice: {s.get('price', 'N/A')}"
-#             for s in business_settings.get("services", [])
-#         )
-        
-#         system_message = f"""Business services:\n{services_info}
-# Respond in {business_settings.get('chat_tone', 'professional')} tone.
-# For appointments, collect:
-# 1. Date
-# 2. Start/end times
-# 3. Email address
-# 4. Description (optional)"""
-
-#         # Determine intent and process
-#         is_scheduling = await detect_scheduling_intent(chat_request.query)
-        
-#         if is_scheduling:
-#             # Scheduling flow
-#             response = client.chat.completions.create(
-#                 model="gpt-4-turbo",
-#                 messages=[
-#                     {"role": "system", "content": system_message},
-#                     {"role": "user", "content": chat_request.query}
-#                 ],
-#                 tools=[{
-#                     "type": "function",
-#                     "function": {
-#                         "name": "create_calendar_event",
-#                         "description": "Schedule a calendar appointment",
-#                         "parameters": {
-#                             "type": "object",
-#                             "properties": {
-#                                 "summary": {"type": "string"},
-#                                 "start_datetime": {"type": "string"},
-#                                 "end_datetime": {"type": "string"},
-#                                 "description": {"type": "string"},
-#                                 "attendees": {
-#                                     "type": "array",
-#                                     "items": {"type": "string", "format": "email"}
-#                                 }
-#                             },
-#                             "required": ["summary", "start_datetime", "end_datetime"]
-#                         }
-#                     }
-#                 }]
-#             )
-
-#             message = response.choices[0].message
-#             if message.tool_calls:
-#                 event_data = json.loads(message.tool_calls[0].function.arguments)
-#                 event_data['summary'] = event_data.get('summary') or "Appointment"
-#                 if user.get('email'):
-#                     event_data.setdefault('attendees', []).append(user['email'])
-                
-#                 event_result = create_calendar_event(EventRequest(**event_data))
-                
-#                 if event_result["status"] == "success":
-#                     response_text = (f"Scheduled: {event_data['summary']}\n"
-#                                     f"Date: {event_data['start_datetime']}\n")
-#                     if event_result.get('meet_link'):
-#                         response_text += f"\nMeet link: {event_result['meet_link']}"
-                    
-#                     # Save to database before returning
-#                     await save_chat_to_db(
-#                         session_id=chat_request.session_id,
-#                         query=chat_request.query,
-#                         response=response_text,
-#                         is_scheduling=True,
-#                         event_details=event_result
-#                     )
-                    
-#                     return ChatResponse(
-#                         user_id=user_id,
-#                         response=response_text,
-#                         event_details=event_result
-#                     )
-#                 else:
-#                     error_response = f"Failed to schedule: {event_result.get('message')}"
-#                     await save_chat_to_db(
-#                         session_id=chat_request.session_id,
-#                         query=chat_request.query,
-#                         response=error_response,
-#                         is_scheduling=True
-#                     )
-#                     return ChatResponse(
-#                         user_id=user_id,
-#                         response=error_response
-#                     )
-        
-#         # Regular chat flow
-#         chat_response = client.chat.completions.create(
-#             model="gpt-4-turbo",
-#             messages=[
-#                 {"role": "system", "content": system_message},
-#                 {"role": "user", "content": chat_request.query}
-#             ]
-#         ).choices[0].message.content
-
-#         # Save to database
-#         await save_chat_to_db(
-#             session_id=chat_request.session_id,
-#             query=chat_request.query,
-#             response=chat_response,
-#             is_scheduling=is_scheduling
-#         )
-
-#         return ChatResponse(user_id=user_id, response=chat_response)
-
-#     except Exception as e:
-#         traceback.print_exc()
-#         raise HTTPException(status_code=500, detail=str(e))
-
 
 
 
@@ -1005,8 +882,60 @@ async def get_chat_sessions(user_id: str):
         "user_id": user_id,
         "chat_sessions": sessions
     }
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+# prompt CRUD
+
+from fastapi import HTTPException, Depends, Body
+from pydantic import BaseModel
+
+class SystemPromptUpdate(BaseModel):
+    system_prompt: str
+
+@app.put("/business-service/system-prompt")
+async def update_system_prompt(
+    system_prompt_update: SystemPromptUpdate = Body(...),
+    current_user: dict = Depends(get_current_user),
+):
+    try:
+        # Get the system prompt from the request body
+        system_prompt = system_prompt_update.system_prompt
+
+        # Update the business settings in the database
+        result = await business_settings_collection.update_one(
+            {"user_id": current_user["_id"]},
+            {"$set": {"system_prompt": system_prompt}},
+            upsert=True
+        )
+        return {"message": "System prompt updated"}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to update system prompt: {e}")
 
 
 
 
+@app.get("/business-service/system-prompt")
+async def get_system_prompt(current_user: dict = Depends(get_current_user)):
+    settings = await business_settings_collection.find_one({"user_id": current_user["_id"]})
+    return {"system_prompt": settings.get("system_prompt", "")}
 
+
+
+@app.delete("/business-service/system-prompt")
+async def delete_system_prompt(current_user: dict = Depends(get_current_user)):
+    try:
+        await business_settings_collection.update_one(
+            {"user_id": current_user["_id"]},
+            {"$unset": {"system_prompt": ""}},
+        )
+        return {"message": "System prompt deleted"}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to delete system prompt: {e}")

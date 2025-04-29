@@ -110,18 +110,16 @@
 
 
 
-
 from fastapi import APIRouter, Request, Form, Response
 from twilio.twiml.messaging_response import MessagingResponse
-from utils.utils import get_chat_completion
 from pymongo import MongoClient
-import os
-from dotenv import load_dotenv
-import datetime
+from utils.utils import get_chat_completion, detect_scheduling_intent, create_calendar_event, EventRequest
 from bson import ObjectId
+import os
+import datetime
 import json
-from utils.utils import detect_scheduling_intent, create_calendar_event, EventRequest
-
+from dotenv import load_dotenv
+from openai import OpenAI
 
 load_dotenv()
 
@@ -146,18 +144,18 @@ async def whatsapp_webhook(
     customer_number = From.replace("whatsapp:", "").replace("+", "").strip()
     owner_number = To.replace("whatsapp:", "").replace("+", "").strip()
 
-    print(f"[DEBUG] Customer: {customer_number}, Owner (Twilio): {owner_number}")
+    print(f"[DEBUG] Customer: {customer_number}, Owner: {owner_number}")
 
     owner_user = users_collection.find_one({"phone_number": owner_number})
     if not owner_user:
-        print(f"[DEBUG] No matching business user found for owner number: {owner_number}")
+        print(f"[DEBUG] No matching owner user found.")
         return Response(status_code=200)
 
     owner_user_id = str(owner_user["_id"])
 
     business_settings = business_settings_collection.find_one({"user_id": ObjectId(owner_user_id)})
     if not business_settings:
-        print(f"[DEBUG] No business settings found for owner user {owner_user_id}")
+        print(f"[DEBUG] No business settings found.")
         return Response(status_code=200)
 
     services_info = "\n".join(
@@ -168,20 +166,19 @@ async def whatsapp_webhook(
     system_message = f"""Business services:\n{services_info}
 Respond in {business_settings.get('chat_tone', 'professional')} tone.
 If the user wants to book an appointment, ask for:
-1. Date
-2. Start/end times
-3. Email address
-4. Description (optional)"""
+- Date
+- Start and end time
+- Email address
+- Description (optional)"""
 
     try:
         # Step 1: Detect scheduling intent
         is_scheduling = await detect_scheduling_intent(Body)
 
         if is_scheduling:
-            # Step 2: Extract event details
-            from openai import OpenAI
-            client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+            print("[DEBUG] Scheduling intent detected.")
 
+            client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
             response = client.chat.completions.create(
                 model="gpt-4-turbo",
                 messages=[
@@ -214,34 +211,40 @@ If the user wants to book an appointment, ask for:
             message = response.choices[0].message
 
             if message.tool_calls:
-                event_data = json.loads(message.tool_calls[0].function.arguments)
-                event_data['summary'] = event_data.get('summary') or "Appointment"
-                if owner_user.get('email'):
-                    event_data.setdefault('attendees', []).append(owner_user['email'])
+                try:
+                    event_data = json.loads(message.tool_calls[0].function.arguments)
 
-                event_result = create_calendar_event(EventRequest(**event_data))
+                    event_data['summary'] = event_data.get('summary') or "Appointment"
 
-                if event_result["status"] == "success":
-                    reply_text = (f"Scheduled: {event_data['summary']}\n"
-                                  f"Date: {event_data['start_datetime']}\n")
-                    if event_result.get('meet_link'):
-                        reply_text += f"\nMeet link: {event_result['meet_link']}"
-                else:
-                    reply_text = f"Failed to schedule: {event_result.get('message')}"
+                    if owner_user.get('email'):
+                        event_data.setdefault('attendees', []).append(owner_user['email'])
 
+                    event_result = create_calendar_event(EventRequest(**event_data))
+
+                    if event_result["status"] == "success":
+                        reply_text = (
+                            f"✅ Scheduled: {event_data['summary']}\n"
+                            f"📅 Date: {event_data['start_datetime']}\n"
+                        )
+                        if event_result.get('meet_link'):
+                            reply_text += f"\n🔗 Meet link: {event_result['meet_link']}"
+                    else:
+                        reply_text = f"❌ Failed to schedule: {event_result.get('message')}"
+                except Exception as e:
+                    print(f"[ERROR] Failed parsing event details: {e}")
+                    reply_text = "I need a bit more information to schedule. Please tell me the date, time, and your email."
             else:
-                reply_text = "Sorry, I couldn't gather enough details to create the event."
+                # No enough info detected by OpenAI
+                reply_text = "I need a few more details to schedule your appointment. Can you share the date, time, and your email?"
 
         else:
-            # Step 3: Regular Chat (not scheduling)
+            print("[DEBUG] Regular chat.")
+            # Step 2: Regular Chat (not scheduling)
             reply_text = get_chat_completion(Body, system_message)
 
-        # Step 4: Save chat history
+        # Step 3: Save chat history
         chat_history_collection.update_one(
-            {
-                "customer_number": customer_number,
-                "owner_number": owner_number
-            },
+            {"customer_number": customer_number, "owner_number": owner_number},
             {
                 "$setOnInsert": {
                     "customer_number": customer_number,
@@ -260,7 +263,7 @@ If the user wants to book an appointment, ask for:
             upsert=True
         )
 
-        # Step 5: Respond back
+        # Step 4: Respond back
         twilio_response = MessagingResponse()
         twilio_response.message(reply_text)
         return Response(content=str(twilio_response), media_type="application/xml")
