@@ -7,6 +7,7 @@ import os
 import datetime
 import json
 import re
+import random
 from dotenv import load_dotenv
 from openai import OpenAI
 
@@ -23,6 +24,9 @@ users_collection = db.users
 business_settings_collection = db.services
 chat_history_collection = db.chat_history
 
+# List of friendly emojis to use after greetings
+GREETING_EMOJIS = ["👋", "😊", "👍", "✨", "🌟", "🙂", "👏", "🤗"]
+
 
 def is_service_inquiry(text):
     service_keywords = [
@@ -35,9 +39,55 @@ def is_service_inquiry(text):
 
 
 def is_greeting(text):
-    greetings = ["hi", "hello", "hey", "yo", "good morning", "good evening", "good afternoon"]
+    greetings = ["hi", "hello", "hey", "hi there", "yo", "good morning", "good evening", "good afternoon"]
     text = text.lower().strip()
     return any(re.fullmatch(rf"{greet}", text) for greet in greetings)
+
+
+def add_greeting_emoji(text, is_greeting_message=False):
+    """Add emoji to greeting if needed."""
+    if not is_greeting_message:
+        return text
+        
+    # Check if the text already contains an emoji
+    emoji_pattern = re.compile("["
+        u"\U0001F600-\U0001F64F"  # emoticons
+        u"\U0001F300-\U0001F5FF"  # symbols & pictographs
+        u"\U0001F680-\U0001F6FF"  # transport & map symbols
+        u"\U0001F700-\U0001F77F"  # alchemical symbols
+        u"\U0001F780-\U0001F7FF"  # Geometric Shapes
+        u"\U0001F800-\U0001F8FF"  # Supplemental Arrows-C
+        u"\U0001F900-\U0001F9FF"  # Supplemental Symbols and Pictographs
+        u"\U0001FA00-\U0001FA6F"  # Chess Symbols
+        u"\U0001FA70-\U0001FAFF"  # Symbols and Pictographs Extended-A
+        u"\U00002702-\U000027B0"  # Dingbats
+        u"\U000024C2-\U0001F251"
+        "]+", flags=re.UNICODE)
+    
+    has_emoji = bool(emoji_pattern.search(text))
+    
+    if has_emoji:
+        return text
+    
+    # If no emoji, check if it starts with a greeting
+    greeting_pattern = re.compile(r'^(hello|hi|hey|greetings)(\s+there)?[,.!]?\s*', re.IGNORECASE)
+    greeting_match = greeting_pattern.search(text)
+    
+    if greeting_match:
+        # Extract the greeting
+        greeting = greeting_match.group(0).rstrip()
+        rest_of_text = text[len(greeting_match.group(0)):]
+        
+        # Add emoji to the greeting
+        emoji = random.choice(GREETING_EMOJIS)
+        text = f"{greeting}{emoji} {rest_of_text}"
+    else:
+        # No greeting found, add one
+        emoji = random.choice(GREETING_EMOJIS)
+        greetings = ["Hello", "Hi there", "Hey"]
+        text = f"{random.choice(greetings)}{emoji} {text}"
+    
+    return text
 
 
 @twilio_router.post("/twilio/whatsapp")
@@ -61,7 +111,8 @@ async def whatsapp_webhook(
 
     business_settings = business_settings_collection.find_one({"user_id": ObjectId(owner_user_id)})
     
-    base_human_message = """You are a friendly person having a casual conversation. 
+    # Updated prompt with clear instructions about emojis
+    base_human_message = """You are a friendly person having a casual conversation.
 
 IMPORTANT: You must sound like a real human, not a chatbot or AI assistant. 
 
@@ -82,10 +133,7 @@ DO THIS INSTEAD:
 - Occasionally use sentence fragments, like real texting
 - Remember that less formal = more human sounding
 
-Keep responses brief like a text message - not essay-length.
-
-DO NOT use emojis in responses.
-DO NOT add greetings like "hello there" at the beginning or end of messages."""
+Keep responses brief like a text message - not essay-length."""
 
     services_section = ""
     has_services = False
@@ -130,6 +178,8 @@ For appointment scheduling, please collect:
 Keep it conversational and friendly - like texting a colleague."""
 
     try:
+        user_greeting = is_greeting(Body)
+        
         if is_service_inquiry(Body):
             print("[DEBUG] Service inquiry detected.")
             if has_services:
@@ -139,9 +189,13 @@ Keep it conversational and friendly - like texting a colleague."""
                 no_services_message = base_human_message + "\n\nThe user is asking about services, but you don't have any active services configured yet. Politely explain that you're still setting up your services and will have more information soon. Suggest they can schedule a consultation to discuss their needs if they'd like."
                 reply_text = get_chat_completion(Body, no_services_message)
 
-        elif is_greeting(Body):
+        elif user_greeting:
             print("[DEBUG] Greeting detected.")
-            reply_text = get_chat_completion(Body, system_message)
+            # Add special instruction for greeting responses
+            greeting_system_message = system_message + "\n\nThe user has sent a greeting. Reply with a friendly greeting that includes an emoji."
+            reply_text = get_chat_completion(Body, greeting_system_message)
+            # Ensure emoji is present in greeting response
+            reply_text = add_greeting_emoji(reply_text, True)
 
         else:
             is_scheduling = await detect_scheduling_intent(Body)
@@ -208,24 +262,11 @@ Keep it conversational and friendly - like texting a colleague."""
                 print("[DEBUG] Regular chat.")
                 reply_text = get_chat_completion(Body, system_message)
 
-        # Additional check to remove any lingering "hello there" messages or unwanted emojis
-        reply_text = re.sub(r'hello there[,.!]?|hey there[,.!]?|hi there[,.!]?', '', reply_text, flags=re.IGNORECASE).strip()
-        # Remove common emojis
-        emoji_pattern = re.compile("["
-            u"\U0001F600-\U0001F64F"  # emoticons
-            u"\U0001F300-\U0001F5FF"  # symbols & pictographs
-            u"\U0001F680-\U0001F6FF"  # transport & map symbols
-            u"\U0001F700-\U0001F77F"  # alchemical symbols
-            u"\U0001F780-\U0001F7FF"  # Geometric Shapes
-            u"\U0001F800-\U0001F8FF"  # Supplemental Arrows-C
-            u"\U0001F900-\U0001F9FF"  # Supplemental Symbols and Pictographs
-            u"\U0001FA00-\U0001FA6F"  # Chess Symbols
-            u"\U0001FA70-\U0001FAFF"  # Symbols and Pictographs Extended-A
-            u"\U00002702-\U000027B0"  # Dingbats
-            u"\U000024C2-\U0001F251"
-            "✅🔗"  # Specifically remove check mark and link emojis
-            "]+", flags=re.UNICODE)
-        reply_text = emoji_pattern.sub(r'', reply_text)
+        # IMPORTANT: Only remove problematic greetings, NOT emojis
+        reply_text = re.sub(r'^(hello there|hey there|hi there)[,.!]?\s+', '', reply_text, flags=re.IGNORECASE).strip()
+        
+        # DO NOT remove emojis - this was causing the issue!
+        # Removed emoji_pattern and emoji removal code
 
         chat_history_collection.update_one(
             {"customer_number": customer_number, "owner_number": owner_number},
