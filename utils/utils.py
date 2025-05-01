@@ -2,7 +2,6 @@ import openai
 import os
 from dotenv import load_dotenv
 from openai import OpenAI
-from constant import system_message
 
 load_dotenv()  # Load environment variables from .env file
 
@@ -11,6 +10,7 @@ model = os.getenv("OPENAI_MODEL")  # Make sure OPENAI_MODEL is set in your .env
 client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
 def get_chat_completion(user_query: str, system_message: str) -> str:
+    
     try:
         # Create a completion using the OpenAI API
         print(f"Querying OpenAI with: {user_query}")
