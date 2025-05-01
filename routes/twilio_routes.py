@@ -65,7 +65,9 @@ async def whatsapp_webhook(
         system_message = f"{system_message}\n\nRespond in a {tone} tone."
     else:
         # Default system message when no business settings exist
-        system_message = """You are a helpful assistant. For appointment scheduling, please collect:
+        system_message = """You are Alex, a friendly assistant who speaks in a natural, conversational way. 
+Use a warm, engaging tone with occasional contractions and natural language patterns like a real person would.
+Avoid robotic responses and formal language. Be helpful, empathetic, and sound like you're chatting with a friend. For appointment scheduling, please collect:
 1. Preferred date
 2. Preferred time
 3. Contact email
