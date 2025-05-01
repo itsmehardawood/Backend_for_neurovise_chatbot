@@ -180,7 +180,6 @@
 #         return Response(content=str(twilio_response), media_type="application/xml")
 
 
-
 from fastapi import APIRouter, Request, Form, Response
 from twilio.twiml.messaging_response import MessagingResponse
 from pymongo import MongoClient
@@ -266,30 +265,48 @@ DO THIS INSTEAD:
 
 Keep responses brief like a text message - not essay-length."""
     
+    # Initialize services_section and has_services
+    services_section = ""
+    has_services = False
+    
     # Prepare system message - prioritize business settings
     if business_settings:
         # Get the custom system prompt if available
         custom_prompt = business_settings.get('system_prompt', '')
         
-        # Add services information if services exist
-        has_services = False
-        if business_settings.get('services'):
-            has_services = True
-            services_info = "\n".join(
-                f"Service: {s['serviceName']}\nDescription: {s['description']}\nPrice: {s.get('price', 'N/A')}"
-                for s in business_settings['services']
-            )
-            services_section = f"Available Services:\n{services_info}"
-        else:
-            services_section = ""
+        # Add services information if services exist and are properly formatted and active
+        if business_settings.get('services') and isinstance(business_settings.get('services'), list) and len(business_settings.get('services')) > 0:
+            # Verify that the services are properly formatted with required fields and are active
+            valid_services = []
+            for service in business_settings.get('services'):
+                # Check if service is active (isActive is True) and has required fields
+                if (isinstance(service, dict) and 
+                    service.get('serviceName') and 
+                    service.get('description') and 
+                    service.get('isActive', False) == True):  # Only include if isActive is True
+                    valid_services.append(service)
+            
+            if valid_services:  # Only set has_services to True if there are valid active services
+                has_services = True
+                services_info = "\n".join(
+                    f"Service: {s['serviceName']}\nDescription: {s['description']}\nPrice: {s.get('price', 'N/A')}"
+                    for s in valid_services
+                )
+                services_section = f"Available Services:\n{services_info}"
+                
+                print(f"[DEBUG] Found {len(valid_services)} active services")
+            else:
+                print("[DEBUG] No active services found")
         
         # Add tone instruction
         tone = business_settings.get('chat_tone', 'professional')
         
         # Combine all parts - ALWAYS starting with the human-like base
-        system_message = f"{base_human_message}\n\n{custom_prompt}\n\n{services_section}\n\nRespond in a {tone}, human-like tone."
+        if services_section:
+            system_message = f"{base_human_message}\n\n{custom_prompt}\n\n{services_section}\n\nRespond in a {tone}, human-like tone."
+        else:
+            system_message = f"{base_human_message}\n\n{custom_prompt}\n\nRespond in a {tone}, human-like tone."
     else:
-        has_services = False
         # Default system message when no business settings exist
         system_message = f"""{base_human_message}
 
@@ -306,11 +323,16 @@ Keep it conversational and friendly - like texting a colleague."""
         # Check if this is a service inquiry
         service_question = is_service_inquiry(Body)
         
-        if service_question and has_services:
+        if service_question:
             print("[DEBUG] Service inquiry detected.")
-            # Force response about services by enhancing the prompt
-            enhanced_system_message = system_message + "\n\nThe user is asking about services. Talk about the available services in a friendly way."
-            reply_text = get_chat_completion(Body, enhanced_system_message)
+            if has_services:
+                # Force response about services by enhancing the prompt
+                enhanced_system_message = system_message + "\n\nThe user is asking about services. Talk about the available services in a friendly way."
+                reply_text = get_chat_completion(Body, enhanced_system_message)
+            else:
+                # No active services available yet
+                no_services_message = base_human_message + "\n\nThe user is asking about services, but you don't have any active services configured yet. Politely explain that you're still setting up your services and will have more information soon. Suggest they can schedule a consultation to discuss their needs if they'd like."
+                reply_text = get_chat_completion(Body, no_services_message)
         else:
             # Step 1: Detect scheduling intent
             is_scheduling = await detect_scheduling_intent(Body)
