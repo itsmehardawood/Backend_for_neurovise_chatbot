@@ -650,9 +650,6 @@ async def start_chat(data: StartChatRequest):
 
     
     
- 
-
-
 
 
 from fastapi import HTTPException
@@ -915,11 +912,26 @@ async def chat_endpoint(chat_request: ChatRequest):
             # Default system message when no business settings exist
             system_message = """You are a helpful assistant that manages appointments. 
 For appointment scheduling, please collect:
-1. Preferred date
-2. Preferred time
-3. Contact email
-4. Service interested in
-5. Any special requests
+Can you provide the following details?
+1. Meeting topic
+2. Start date and time
+3. End date and time
+4. email address
+
+if user talking in hebrew ask him: 
+
+האם תוכל לספק את הפרטים הבאים?
+1. נושא הפגישה
+2. תאריך ושעת התחלה
+3. תאריך ושעה סיום
+4. כתובת אימייל
+
+
+
+
+
+
+
 
 IMPORTANT: You CAN and SHOULD book appointments when requested. Use the appointment scheduling function when appropriate.
 Respond in a professional tone."""
@@ -964,7 +976,7 @@ Respond in a professional tone."""
                     "parameters": {
                         "type": "object",
                         "properties": {
-                            "summary": {"type": "string", "description": "Title of the appointment"},
+                            "summary": {"type": "string", "description": "The topic of the meeting"},
                             "start_datetime": {"type": "string", "description": "Start time in ISO format (YYYY-MM-DDTHH:MM:SS)"},
                             "end_datetime": {"type": "string", "description": "End time in ISO format (YYYY-MM-DDTHH:MM:SS)"},
                             "description": {"type": "string", "description": "Additional details about the appointment"},
@@ -1148,7 +1160,7 @@ Respond in a professional tone."""
                 
                 # If the API didn't use the tool, we'll use a modified system message
                 # that encourages getting the details for next time
-                assist_system_message = system_message + "\n\nThe user wants to schedule an appointment. If you don't have enough details yet, ask for specific information like date, time, and purpose. DO NOT refuse to help with scheduling - that is your primary purpose. Never say you cannot book appointments. ONLY mention active services."
+                assist_system_message = system_message + "\n\nThe user wants to schedule an appointment. If you don't have enough details yet, ask Can I help you with a specific topic? like date, time, and purpose. DO NOT refuse to help with scheduling - that is your primary purpose. Never say you cannot book appointments. ONLY mention active services."
                 
                 if active_services:
                     active_services_info = "\n".join(
