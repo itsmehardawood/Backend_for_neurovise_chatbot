@@ -300,7 +300,7 @@ Keep it conversational and friend and to the point directly - like texting a col
     services_section = ""
     if active_services:
         services_info = "\n".join(
-            f"Service: {s['serviceName']}\nDescription: {s['description'][:100]}...\nPrice: {s.get('price', 'N/A')}"
+            f"Service: {s['serviceName']}\nDescription: {s['description']}...\nPrice: {s.get('price', 'N/A')}"
             for s in active_services[:5]  # Limit to 5 services to reduce token count
         )
         services_section = f"Available Services:\n{services_info}"
