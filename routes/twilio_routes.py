@@ -256,7 +256,7 @@ DO THIS INSTEAD:
 Keep responses brief like a text message - not essay-length."""
 
     # Default system message if no business settings are found
-    if business_settings:
+    if not business_settings:
         system_message = f"""{base_human_message}
 
 For appointment scheduling, response should be this :
