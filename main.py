@@ -80,7 +80,7 @@ client = AsyncIOMotorClient(
     tls=True
 )
 
-db = client.Echo_db
+db = client.Neurovise_DB
 users_collection = db.users
 business_settings_collection = db.services
 chat_history_collection = db.chat_history
@@ -175,7 +175,6 @@ async def save_business_settings(
         new_services_serialized = [
             {
                 **service.dict(exclude={"working_hours"}),
-                "price": f"{service.price:.2f}",  # Properly formatted as string
                 "working_hours": {
                     day: vars(hours) for day, hours in service.working_hours.items()
                 } if service.working_hours else None,

@@ -29,8 +29,6 @@ class WorkingHours(BaseModel):
 class Service(BaseModel):
     serviceName: str
     description: str
-    priceType: str
-    price: Decimal
     isActive: bool
     id: int
     working_hours: Optional[Dict[str, WorkingHours]] = None
