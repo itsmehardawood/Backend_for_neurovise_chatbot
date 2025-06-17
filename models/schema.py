@@ -1,7 +1,12 @@
 from decimal import Decimal
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from typing import List, Dict
 from typing import Optional
+from datetime import datetime
+from bson import ObjectId
+
+
+
 
 class ChatRequest(BaseModel):
     user_id: str
@@ -41,8 +46,6 @@ class WorkingHoursUpdate(BaseModel):
 class ServiceUpdate(BaseModel):
     serviceName: Optional[str] = None
     description: Optional[str] = None
-    priceType: Optional[str] = None
-    price: Optional[Decimal] = None
     isActive: Optional[bool] = None
     working_hours: Optional[Dict[str, WorkingHoursUpdate]] = None    
     
@@ -55,3 +58,5 @@ class BusinessSettings(BaseModel):
     services: List[Service]
     chat_tone: str  # Removed the top-level working_hours field here
     system_prompt: Optional[str] = None  # <--- ADD THIS
+    
+ 

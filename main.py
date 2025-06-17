@@ -1,7 +1,7 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from models.schema import ChatRequest, ChatResponse
-from utils.utils import get_chat_completion, check_for_greeting, check_for_proper_greeting, remove_greeting
+from utils.utils import  check_for_greeting
 from dotenv import load_dotenv
 from routes.twilio_routes import twilio_router
 import os
@@ -17,7 +17,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
 from motor.motor_asyncio import AsyncIOMotorClient
 from jose import JWTError, jwt
-from utils.utils import get_chat_completion
+
 from bson import ObjectId  # Import ObjectId to convert string to MongoDB's ObjectId type
 from dotenv import load_dotenv
 from bson import ObjectId
@@ -85,6 +85,8 @@ users_collection = db.users
 business_settings_collection = db.services
 chat_history_collection = db.chat_history
 chat_sessions_collection = db.chat_sessions
+qna_collection = db.qna
+
 
 
 # ─── UTILS ─────────────────────────────────────────────────────────────────────
@@ -280,19 +282,12 @@ async def get_service(service_id: str):
         system_prompt = business_settings.get("system_prompt", None)
         
         # Convert price from string to Decimal if needed
-        price = service["price"]
-        if isinstance(price, str):
-            try:
-                price = Decimal(price)
-            except:
-                price = Decimal("0.00")
+     
         
         # Return properly formatted service data
         return {
             "serviceName": service["serviceName"],
             "description": service["description"],
-            "priceType": service["priceType"],
-            "price": price,
             "isActive": service["isActive"],
             "id": service["id"],
             "working_hours": {
@@ -319,48 +314,39 @@ async def get_service(service_id: str):
 
 
 
-
-
 @app.put("/service/{service_id}", response_model=Service)
-async def update_service(service_id: str, service_update: ServiceUpdate = Body(...)):
+async def update_service(
+    service_id: str,
+    service_update: ServiceUpdate = Body(...),
+    current_user: dict = Depends(get_current_user)
+):
     try:
-        # Attempt to cast service_id to int for matching
-        try:
-            service_id_int = int(service_id)
-            query = {"services.id": service_id_int}
-        except ValueError:
-            query = {"services.id": service_id}
+        # Prepare the query with user_id and service.id match
+        query = {
+            "user_id": current_user["_id"],
+            "services.id": int(service_id) if service_id.isdigit() else service_id
+        }
 
-        # Retrieve the document containing the service
-        business_settings = await business_settings_collection.find_one(query)
-        if not business_settings:
-            raise HTTPException(status_code=404, detail="Service not found")
-
-        # Prepare the update operations
+        # Extract update data
         update_data = service_update.dict(exclude_unset=True)
-        update_operations = {}
+        if not update_data:
+            raise HTTPException(status_code=400, detail="No valid fields to update")
 
+        # Build update operations
+        update_operations = {}
         for field, value in update_data.items():
             if field == "working_hours":
                 for day, hours in value.items():
-                    if hasattr(hours, "dict"):
-                        hours_dict = hours.dict(exclude_unset=True)
-                    else:
-                        hours_dict = hours
-
+                    hours_dict = hours.dict(exclude_unset=True) if hasattr(hours, "dict") else hours
                     for hour_field, hour_value in hours_dict.items():
-                        if hour_value is not None:
-                            update_operations[f"services.$.working_hours.{day}.{hour_field}"] = hour_value
+                        update_operations[f"services.$.working_hours.{day}.{hour_field}"] = hour_value
             else:
-                if value is not None:
-                    if field == "price" and isinstance(value, Decimal):
-                        value = float(value)
-                    update_operations[f"services.$.{field}"] = value
+                update_operations[f"services.$.{field}"] = value
 
         if not update_operations:
-            raise HTTPException(status_code=400, detail="No valid fields to update")
+            raise HTTPException(status_code=400, detail="No valid update data found")
 
-        # Perform the update in the array of embedded documents
+        # Apply the update
         result = await business_settings_collection.update_one(
             query,
             {"$set": update_operations}
@@ -369,20 +355,15 @@ async def update_service(service_id: str, service_update: ServiceUpdate = Body(.
         if result.modified_count == 0:
             raise HTTPException(status_code=404, detail="Service not found or no changes made")
 
-        # Fetch the updated document to return the modified service
+        # Fetch updated service
         updated_doc = await business_settings_collection.find_one(query)
-        updated_service = None
-        for service in updated_doc.get("services", []):
-            if str(service.get("id")) == str(service_id):
-                updated_service = service
-                break
+        updated_service = next(
+            (s for s in updated_doc.get("services", []) if str(s.get("id")) == str(service_id)),
+            None
+        )
 
         if not updated_service:
             raise HTTPException(status_code=404, detail="Updated service not found")
-
-        # Convert Decimal to float for JSON serialization
-        if isinstance(updated_service.get("price"), Decimal):
-            updated_service["price"] = float(updated_service["price"])
 
         return updated_service
 
@@ -391,9 +372,6 @@ async def update_service(service_id: str, service_update: ServiceUpdate = Body(.
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
 
-
-
-# delete api for service 
 
 
 from fastapi import HTTPException, APIRouter
@@ -497,154 +475,6 @@ async def start_chat(data: StartChatRequest):
     
     
     
-# old chat
-
-
-# @app.post("/chat", response_model=ChatResponse)
-# async def chat_endpoint(chat_request: ChatRequest):
-#     try:
-#         # Validate session and user
-#         session = await chat_sessions_collection.find_one({"session_id": chat_request.session_id})
-#         if not session:
-#             raise HTTPException(status_code=404, detail="Session not found")
-        
-#         user_id = chat_request.user_id or session.get("user_id")
-#         if not user_id:
-#             raise HTTPException(status_code=400, detail="User ID required")
-
-#         user = await users_collection.find_one({"_id": ObjectId(user_id)})
-#         if not user:
-#             raise HTTPException(status_code=404, detail="User not found")
-
-#         # Get business settings
-#         business_settings = await business_settings_collection.find_one({"user_id": ObjectId(user_id)})
-        
-#         # Prepare system message - prioritize business settings
-#         if business_settings:
-#             # Start with the custom system prompt if available
-#             system_message = business_settings.get('system_prompt', '')
-            
-#             # Add services information if services exist
-#             if business_settings.get('services'):
-#                 services_info = "\n".join(
-#                     f"Service: {s['serviceName']}\nDescription: {s['description']}\nPrice: {s.get('price', 'N/A')}"
-#                     for s in business_settings['services']
-#                 )
-#                 system_message = f"Available Services:\n{services_info}\n\n{system_message}"
-            
-#             # Add tone instruction
-#             tone = business_settings.get('chat_tone', 'professional')
-#             system_message = f"{system_message}\n\nRespond in a {tone} tone."
-#         else:
-#             # Default system message when no business settings exist
-#             system_message = """You are a helpful assistant. For appointment scheduling, please collect:
-# 1. Preferred date
-# 2. Preferred time
-# 3. Contact email
-# 4. Service interested in
-# 5. Any special requests
-
-# Respond in a professional tone."""
-
-#         # [Rest of your existing code remains the same...]
-#         # Determine intent and process
-#         is_scheduling = await detect_scheduling_intent(chat_request.query)
-        
-#         if is_scheduling:
-#             # Scheduling flow
-#             response = client.chat.completions.create(
-#                 model="gpt-3.5-turbo",
-#                 messages=[
-#                     {"role": "system", "content": system_message},
-#                     {"role": "user", "content": chat_request.query}
-#                 ],
-#                 tools=[{
-#                     "type": "function",
-#                     "function": {
-#                         "name": "create_calendar_event",
-#                         "description": "Schedule a calendar appointment",
-#                         "parameters": {
-#                             "type": "object",
-#                             "properties": {
-#                                 "summary": {"type": "string"},
-#                                 "start_datetime": {"type": "string"},
-#                                 "end_datetime": {"type": "string"},
-#                                 "description": {"type": "string"},
-#                                 "attendees": {
-#                                     "type": "array",
-#                                     "items": {"type": "string", "format": "email"}
-#                                 }
-#                             },
-#                             "required": ["summary", "start_datetime", "end_datetime"]
-#                         }
-#                     }
-#                 }]
-#             )
-
-#             message = response.choices[0].message
-#             if message.tool_calls:
-#                 event_data = json.loads(message.tool_calls[0].function.arguments)
-#                 event_data['summary'] = event_data.get('summary') or "Appointment"
-#                 if user.get('email'):
-#                     event_data.setdefault('attendees', []).append(user['email'])
-                
-#                 event_result = create_calendar_event(EventRequest(**event_data))
-                
-#                 if event_result["status"] == "success":
-#                     response_text = (f"Scheduled: {event_data['summary']}\n"
-#                                     f"Date: {event_data['start_datetime']}\n")
-#                     if event_result.get('meet_link'):
-#                         response_text += f"\nMeet link: {event_result['meet_link']}"
-                    
-#                     # Save to database before returning
-#                     await save_chat_to_db(
-#                         session_id=chat_request.session_id,
-#                         query=chat_request.query,
-#                         response=response_text,
-#                         is_scheduling=True,
-#                         event_details=event_result
-#                     )
-                    
-#                     return ChatResponse(
-#                         user_id=user_id,
-#                         response=response_text,
-#                         event_details=event_result
-#                     )
-#                 else:
-#                     error_response = f"Failed to schedule: {event_result.get('message')}"
-#                     await save_chat_to_db(
-#                         session_id=chat_request.session_id,
-#                         query=chat_request.query,
-#                         response=error_response,
-#                         is_scheduling=True
-#                     )
-#                     return ChatResponse(
-#                         user_id=user_id,
-#                         response=error_response
-#                     )
-        
-#         # Regular chat flow
-#         chat_response = client.chat.completions.create(
-#             model="gpt-3.5-turbo",
-#             messages=[
-#                 {"role": "system", "content": system_message},
-#                 {"role": "user", "content": chat_request.query}
-#             ]
-#         ).choices[0].message.content
-
-#         # Save to database
-#         await save_chat_to_db(
-#             session_id=chat_request.session_id,
-#             query=chat_request.query,
-#             response=chat_response,
-#             is_scheduling=is_scheduling
-#         )
-
-#         return ChatResponse(user_id=user_id, response=chat_response)
-
-#     except Exception as e:
-#         traceback.print_exc()
-#         raise HTTPException(status_code=500, detail=str(e))
 
 
     
@@ -761,32 +591,84 @@ async def detect_scheduling_intent(query: str) -> bool:
     )
     return response.choices[0].message.content.strip().lower() == 'yes'
 
-async def save_chat_to_db(session_id: str, query: str, response: str, is_scheduling: bool, event_details: Optional[dict] = None):
-    """Helper function to save chat history to database"""
+# async def save_chat_to_db(session_id: str, query: str, response: str, is_scheduling: bool, event_details: Optional[dict] = None):
+#     """Helper function to save chat history to database"""
+#     try:
+#         update_data = {
+#             "$push": {
+#                 "messages": {
+#                     "query": query,
+#                     "response": response,
+#                     "timestamp": datetime.utcnow(),
+#                     "is_scheduling": is_scheduling
+#                 }
+#             },
+#             "$set": {"last_activity": datetime.utcnow()}
+#         }
+        
+#         if event_details:
+#             update_data["$push"]["messages"]["event_details"] = event_details
+        
+#         await chat_sessions_collection.update_one(
+#             {"session_id": session_id},
+#             update_data
+#         )
+#     except Exception as e:
+#         print(f"Failed to save chat to database: {str(e)}")
+#         traceback.print_exc()
+
+
+async def save_chat_to_db(session_id, query, response, is_scheduling=False, event_details=None, qna_match_id=None, qna_match_score=None):
+    """
+    Save chat interaction to database with optional QnA metadata
+    Saves messages as embedded array within the session document
+    """
     try:
-        update_data = {
-            "$push": {
-                "messages": {
-                    "query": query,
-                    "response": response,
-                    "timestamp": datetime.utcnow(),
-                    "is_scheduling": is_scheduling
-                }
-            },
-            "$set": {"last_activity": datetime.utcnow()}
+        print(f"Saving chat to DB - Session ID: {session_id}")
+        
+        # Create the message object
+        message_record = {
+            "query": query,
+            "response": response,
+            "is_scheduling": is_scheduling,
+            "timestamp": datetime.utcnow(),
+            "event_details": event_details
         }
         
-        if event_details:
-            update_data["$push"]["messages"]["event_details"] = event_details
+        # Add QnA metadata if this response used QnA knowledge
+        if qna_match_id and qna_match_score:
+            message_record.update({
+                "used_qna": True,
+                "qna_match_id": qna_match_id,
+                "qna_match_score": qna_match_score,
+                "response_type": "qna_enhanced"
+            })
+        else:
+            message_record.update({
+                "used_qna": False,
+                "response_type": "regular_chat"
+            })
         
-        await chat_sessions_collection.update_one(
+        # Update the session document by pushing the message to the messages array
+        # and updating the last_activity timestamp
+        result = await chat_sessions_collection.update_one(
             {"session_id": session_id},
-            update_data
+            {
+                "$push": {"messages": message_record},
+                "$set": {"last_activity": datetime.utcnow()}
+            }
         )
+        
+        if result.matched_count > 0:
+            print(f"Chat message added to session {session_id}. Used QnA: {message_record.get('used_qna', False)}")
+        else:
+            print(f"Warning: Session {session_id} not found when trying to save message")
+        
     except Exception as e:
-        print(f"Failed to save chat to database: {str(e)}")
+        print(f"Error saving chat to database: {e}")
+        import traceback
         traceback.print_exc()
-
+        # Don't raise exception as this shouldn't break the chat flow
 
 
 
@@ -848,12 +730,12 @@ def prepare_business_info(business_settings: dict, max_tokens: int = 4000) -> st
         active_services = [s for s in business_settings['services'] if s.get('isActive', True)]
         
         # Limit the number of services if needed
-        max_services = 5  # Adjust based on your needs
+        max_services = 9  # Adjust based on your needs
         services = active_services[:max_services]
         
         if services:  # Only proceed if there are active services
             services_info = "\n".join(
-                f"- {s['serviceName']}: {s.get('price', 'N/A')} - {s.get('description', '')[:100]}..." 
+                f"- {s['serviceName']}:  {s.get('description', '')[:100]}..." 
                 for s in services
             )
             
@@ -868,6 +750,481 @@ def prepare_business_info(business_settings: dict, max_tokens: int = 4000) -> st
     
     # Ensure the system message fits within token limit
     return truncate_system_message(system_message, max_tokens)
+
+# @app.post("/chat", response_model=ChatResponse)
+# async def chat_endpoint(chat_request: ChatRequest):
+#     try:
+#         # Validate session and user
+#         session = await chat_sessions_collection.find_one({"session_id": chat_request.session_id})
+#         if not session:
+#             raise HTTPException(status_code=404, detail="Session not found")
+        
+#         user_id = chat_request.user_id or session.get("user_id")
+#         if not user_id:
+#             raise HTTPException(status_code=400, detail="User ID required")
+
+#         user = await users_collection.find_one({"_id": ObjectId(user_id)})
+#         if not user:
+#             raise HTTPException(status_code=404, detail="User not found")
+
+#         # Get business settings
+#         business_settings = await business_settings_collection.find_one({"user_id": ObjectId(user_id)})
+        
+#         # DEBUG: Log user query
+#         print(f"Processing chat request. Query: {chat_request.query}")
+        
+#         # Filter for active services
+#         active_services = []
+#         if business_settings and business_settings.get('services'):
+#             active_services = [s for s in business_settings['services'] if s.get('isActive', True)]
+#             print(f"Found {len(active_services)} active services out of {len(business_settings.get('services', []))} total services")
+        
+#         # Prepare system message - prioritize business settings
+#         if business_settings:
+#             # Add debugging info about business settings
+#             print(f"Found business settings: {business_settings.get('name', 'Unnamed Business')}")
+            
+#             # Use the token-aware function to prepare business info
+#             system_message = prepare_business_info(business_settings)
+            
+#             # Enhanced system prompt for better appointment handling
+#             system_message += "\n\nIMPORTANT: You are a virtual assistant that helps with booking appointments. If a user wants to schedule an appointment, help them by collecting the necessary information and use the provided function to create a calendar event. ONLY discuss and recommend ACTIVE services listed above."
+#         else:
+#             # Default system message when no business settings exist
+#             system_message = """You are a helpful assistant that manages appointments. 
+# For appointment scheduling, please collect:
+# Can you provide the following details?
+# 1. Meeting topic
+# 2. Start date and time
+# 3. End date and time
+# 4. email address
+
+# if user talking in hebrew ask him: 
+
+# האם תוכל לספק את הפרטים הבאים?
+# 1. נושא הפגישה
+# 2. תאריך ושעת התחלה
+# 3. תאריך ושעה סיום
+# 4. כתובת אימייל
+
+
+
+
+
+
+
+
+# IMPORTANT: You CAN and SHOULD book appointments when requested. Use the appointment scheduling function when appropriate.
+# Respond in a professional tone."""
+
+#         # Set max tokens limit with buffer
+#         MAX_TOKENS = 16000  # Lower than the actual limit of 16385
+        
+#         # DEBUG: Log system message beginning
+#         print(f"System message starts with: {system_message[:100]}...")
+        
+#         # Determine intent and process
+#         is_scheduling = await detect_scheduling_intent(chat_request.query)
+        
+#         # DEBUG: Log scheduling intent
+#         print(f"Scheduling intent detected: {is_scheduling}")
+        
+#         if is_scheduling:
+#             # DEBUG: Log entering scheduling flow
+#             print("Entering scheduling flow...")
+            
+#             # Enhanced system message specific for scheduling
+#             scheduling_system_message = system_message
+            
+#             # Add active services info explicitly for scheduling
+#             if active_services:
+#                 active_services_info = "\n".join(
+#                     f"- {s['serviceName']}: {s.get('description', '')}" 
+#                     for s in active_services[:9]  # Limit to 5 services
+#                 )
+#                 scheduling_system_message += f"\n\nONLY offer these active services for booking:\n{active_services_info}"
+#             else:
+#                 scheduling_system_message += "\n\nThere are no specific services defined. Schedule a general appointment."
+            
+#             scheduling_system_message += "\n\nThe user is trying to schedule an appointment. Help them by collecting all necessary information and use the create_calendar_event function to book it. DO NOT refuse to book appointments - that is your primary function. ONLY discuss and recommend ACTIVE services."
+            
+#             # Define the function call with calendar event schema
+#             calendar_function = {
+#                 "type": "function",
+#                 "function": {
+#                     "name": "create_calendar_event",
+#                     "description": "Schedule a calendar appointment",
+#                     "parameters": {
+#                         "type": "object",
+#                         "properties": {
+#                             "summary": {"type": "string", "description": "The topic of the meeting"},
+#                             "start_datetime": {"type": "string", "description": "Start time in ISO format (YYYY-MM-DDTHH:MM:SS)"},
+#                             "end_datetime": {"type": "string", "description": "End time in ISO format (YYYY-MM-DDTHH:MM:SS)"},
+#                             "description": {"type": "string", "description": "Additional details about the appointment"},
+#                             "attendees": {
+#                                 "type": "array",
+#                                 "items": {"type": "string", "format": "email"},
+#                                 "description": "List of email addresses for attendees"
+#                             }
+#                         },
+#                         "required": ["summary", "start_datetime", "end_datetime"]
+#                     }
+#                 }
+#             }
+            
+#             # Create messages array
+#             messages = [
+#                 {"role": "system", "content": scheduling_system_message},
+#                 {"role": "user", "content": chat_request.query}
+#             ]
+            
+#             # Check if token count exceeds limit
+#             message_tokens = count_tokens(messages)
+#             if message_tokens > MAX_TOKENS:
+#                 # Calculate how much we need to reduce
+#                 excess_tokens = message_tokens - MAX_TOKENS + 500  # Buffer
+                
+#                 # Recalculate with a shorter system message
+#                 max_system_tokens = len(encoder.encode(scheduling_system_message)) - excess_tokens
+#                 if max_system_tokens < 500:  # Minimum viable system message
+#                     max_system_tokens = 500
+                
+#                 scheduling_system_message = truncate_system_message(scheduling_system_message, max_system_tokens)
+#                 messages[0]["content"] = scheduling_system_message
+                
+#                 # Verify we're now within limits
+#                 if count_tokens(messages) > MAX_TOKENS:
+#                     # As a last resort, truncate the user query
+#                     user_tokens = len(encoder.encode(chat_request.query))
+#                     if user_tokens > 1000:  # Only truncate if it's long
+#                         max_query_tokens = user_tokens - (count_tokens(messages) - MAX_TOKENS) - 100
+#                         truncated_query = encoder.decode(encoder.encode(chat_request.query)[:max_query_tokens])
+#                         truncated_query += " [message truncated]"
+#                         messages[1]["content"] = truncated_query
+            
+#             # DEBUG: Log messages before API call
+#             print(f"Making scheduling API call with message tokens: {count_tokens(messages)}")
+            
+#             # Make the API call with token-managed messages
+#             response = client.chat.completions.create(
+#                 model="gpt-3.5-turbo",
+#                 messages=messages,
+#                 tools=[calendar_function],
+#                 tool_choice="auto"  # Explicitly tell the model to use tools when appropriate
+#             )
+
+#             # DEBUG: Log basic response info
+#             print(f"Received response. Contains tool calls: {hasattr(response.choices[0].message, 'tool_calls') and bool(response.choices[0].message.tool_calls)}")
+            
+#             message = response.choices[0].message
+            
+#             # Check for tool calls from the API response
+#             if message.tool_calls:
+#                 try:
+#                     # DEBUG: Log tool call details
+#                     print(f"Tool call received: {message.tool_calls[0].function.name}")
+                    
+#                     event_data = json.loads(message.tool_calls[0].function.arguments)
+#                     print(f"Event data: {event_data}")
+                    
+#                     # Validate that the requested service is active (if service is specified)
+#                     is_valid_service = True
+#                     if event_data.get('description') and business_settings and business_settings.get('services'):
+#                         # Basic check if the description contains an inactive service name
+#                         inactive_service_names = [s['serviceName'].lower() for s in business_settings.get('services', []) 
+#                                             if not s.get('isActive', True)]
+                        
+#                         for inactive_service in inactive_service_names:
+#                             if inactive_service in event_data.get('description', '').lower():
+#                                 is_valid_service = False
+#                                 break
+                    
+#                     if not is_valid_service:
+#                         # If inactive service detected, return a helpful message
+#                         inactive_response = "I notice you're interested in a service that isn't currently available. Here are the services we currently offer:\n\n"
+#                         inactive_response += "\n".join(
+#                             f"- {s['serviceName']}: {s.get('description', '')}" 
+#                             for s in active_services
+#                         )
+#                         inactive_response += "\n\nWould you like to book an appointment for one of these services instead?"
+                        
+#                         await save_chat_to_db(
+#                             session_id=chat_request.session_id,
+#                             query=chat_request.query,
+#                             response=inactive_response,
+#                             is_scheduling=True
+#                         )
+                        
+#                         return ChatResponse(
+#                             user_id=user_id,
+#                             response=inactive_response
+#                         )
+                    
+#                     event_data['summary'] = event_data.get('summary') or "Appointment"
+                    
+#                     # Make sure we have both attendees and user email if available
+#                     if 'attendees' not in event_data:
+#                         event_data['attendees'] = []
+                    
+#                     if user.get('email') and user['email'] not in event_data['attendees']:
+#                         event_data['attendees'].append(user['email'])
+                    
+#                     # Create the calendar event
+#                     event_result = create_calendar_event(EventRequest(**event_data))
+                    
+#                     if event_result["status"] == "success":
+#                         # Format a friendly response for successful scheduling
+#                         start_datetime = event_data['start_datetime'].replace('T', ' at ').split('+')[0]
+                        
+#                         response_text = f"Great! I've scheduled your appointment:\n\n"
+#                         response_text += f"📅 {event_data['summary']}\n"
+#                         response_text += f"🕒 {start_datetime}\n"
+                        
+#                         if event_data.get('description'):
+#                             response_text += f"📝 {event_data['description']}\n"
+                        
+#                         if event_result.get('meet_link'):
+#                             response_text += f"\n🔗 Video call link: {event_result['meet_link']}"
+                        
+#                         # Add confirmation number
+#                         response_text += f"\n\nConfirmation #: {event_result['event_id'][-6:]}"
+                        
+#                         # Save to database before returning
+#                         await save_chat_to_db(
+#                             session_id=chat_request.session_id,
+#                             query=chat_request.query,
+#                             response=response_text,
+#                             is_scheduling=True,
+#                             event_details=event_result
+#                         )
+                        
+#                         return ChatResponse(
+#                             user_id=user_id,
+#                             response=response_text,
+#                             event_details=event_result
+#                         )
+#                     else:
+#                         error_response = f"I tried to schedule your appointment, but encountered an error: {event_result.get('message')}"
+#                         await save_chat_to_db(
+#                             session_id=chat_request.session_id,
+#                             query=chat_request.query,
+#                             response=error_response,
+#                             is_scheduling=True
+#                         )
+#                         return ChatResponse(
+#                             user_id=user_id,
+#                             response=error_response
+#                         )
+#                 except Exception as tool_error:
+#                     # Log the specific error with the tool call
+#                     print(f"Error processing tool call: {str(tool_error)}")
+#                     traceback.print_exc()
+                    
+#                     # Fall back to regular response
+#                     fallback_response = f"I encountered an issue while trying to schedule your appointment: {str(tool_error)}. Please try again with complete details including date, time, and purpose."
+                    
+#                     await save_chat_to_db(
+#                         session_id=chat_request.session_id,
+#                         query=chat_request.query,
+#                         response=fallback_response,
+#                         is_scheduling=True
+#                     )
+                    
+#                     return ChatResponse(
+#                         user_id=user_id,
+#                         response=fallback_response
+#                     )
+#             else:
+#                 # The model didn't use the function, but we know it's a scheduling intent
+#                 # Let's get more information and proceed with normal chat flow
+#                 print("Model didn't use tool call despite scheduling intent. Using regular chat response.")
+                
+#                 # If the API didn't use the tool, we'll use a modified system message
+#                 # that encourages getting the details for next time
+#                 assist_system_message = system_message + "\n\nThe user wants to schedule an appointment. If you don't have enough details yet, ask Can I help you with a specific topic? like date, time, and purpose. DO NOT refuse to help with scheduling - that is your primary purpose. Never say you cannot book appointments. ONLY mention active services."
+                
+#                 if active_services:
+#                     active_services_info = "\n".join(
+#                         f"- {s['serviceName']}: {s.get('description', '')}" 
+#                         for s in active_services[:5]
+#                     )
+#                     assist_system_message += f"\n\nACTIVE SERVICES:\n{active_services_info}"
+                
+#                 messages = [
+#                     {"role": "system", "content": assist_system_message},
+#                     {"role": "user", "content": chat_request.query}
+#                 ]
+                
+#                 # Check token count for regular messages
+#                 if count_tokens(messages) > MAX_TOKENS:
+#                     # Apply token reduction as before
+#                     assist_system_message = truncate_system_message(assist_system_message, 4000)
+#                     messages[0]["content"] = assist_system_message
+                
+#                 # Use regular chat completion to ask for more details
+#                 chat_completion = client.chat.completions.create(
+#                     model="gpt-3.5-turbo",
+#                     messages=messages
+#                 )
+                
+#                 # Get text response
+#                 chat_response = chat_completion.choices[0].message.content
+                
+#                 # Apply greeting formatting using the functions from paste-2.txt
+        
+                
+#                 # Save to database
+#                 await save_chat_to_db(
+#                     session_id=chat_request.session_id,
+#                     query=chat_request.query,
+#                     response=chat_response,
+#                     is_scheduling=True
+#                 )
+                
+#                 return ChatResponse(user_id=user_id, response=chat_response)
+        
+#         # Regular chat flow (non-scheduling intent)
+#         print("Using regular chat flow...")
+        
+#         # Check if we should add greeting formatting
+#         has_greeting = check_for_greeting(chat_request.query)
+        
+#         # Add greeting instructions if needed
+#         if has_greeting:
+#             system_message += "\n\nIMPORTANT: Begin your response with a friendly greeting like 'Hello' or 'Hi there' and include an emoji right after the greeting word (with no space). For example: 'Hello👋' or 'Hi there😊'. The rest of your response should NOT contain any emojis."
+#         else:
+#             system_message += "\n\nIMPORTANT: DO NOT begin your message with greeting phrases like 'hello there', 'hi there', etc. DO NOT use emojis in your response."
+        
+#         # Create messages for regular chat flow
+#         messages = [
+#             {"role": "system", "content": system_message},
+#             {"role": "user", "content": chat_request.query}
+#         ]
+        
+#         # Check token count for regular messages
+#         message_tokens = count_tokens(messages)
+#         if message_tokens > MAX_TOKENS:
+#             # Apply same token reduction logic as before
+#             excess_tokens = message_tokens - MAX_TOKENS + 500  # Buffer
+#             max_system_tokens = len(encoder.encode(system_message)) - excess_tokens
+#             if max_system_tokens < 500:
+#                 max_system_tokens = 500
+            
+#             system_message = truncate_system_message(system_message, max_system_tokens)
+#             messages[0]["content"] = system_message
+            
+#             # If still too large, truncate user query as last resort
+#             if count_tokens(messages) > MAX_TOKENS:
+#                 user_tokens = len(encoder.encode(chat_request.query))
+#                 if user_tokens > 1000:
+#                     max_query_tokens = user_tokens - (count_tokens(messages) - MAX_TOKENS) - 100
+#                     truncated_query = encoder.decode(encoder.encode(chat_request.query)[:max_query_tokens])
+#                     truncated_query += " [message truncated]"
+#                     messages[1]["content"] = truncated_query
+        
+#         # Make regular chat API call
+#         chat_completion = client.chat.completions.create(
+#             model="gpt-3.5-turbo",
+#             messages=messages
+#         )
+        
+#         # Get the response content
+#         chat_response = chat_completion.choices[0].message.content
+        
+        
+#         # Save to database
+#         await save_chat_to_db(
+#             session_id=chat_request.session_id,
+#             query=chat_request.query,
+#             response=chat_response,
+#             is_scheduling=is_scheduling
+#         )
+
+#         return ChatResponse(user_id=user_id, response=chat_response)
+
+#     except Exception as e:
+#         print(f"Error in chat endpoint: {str(e)}")
+#         traceback.print_exc()
+#         raise HTTPException(status_code=500, detail=str(e))
+
+
+
+
+#new chat
+
+
+
+import re
+from difflib import SequenceMatcher
+
+# Add these helper functions for QnA matching
+def calculate_similarity(text1, text2):
+    """Calculate similarity between two texts"""
+    return SequenceMatcher(None, text1.lower(), text2.lower()).ratio()
+
+def search_qna_knowledge(user_query, qna_items, similarity_threshold=0.3):
+    """
+    Search through QnA items for relevant answers
+    Returns the best matching QnA item or None
+    """
+    if not qna_items:
+        return None
+    
+    user_query_lower = user_query.lower()
+    best_match = None
+    best_score = 0
+    
+    for item in qna_items:
+        question_lower = item['question'].lower()
+        
+        # Direct keyword matching (higher priority)
+        query_words = set(user_query_lower.split())
+        question_words = set(question_lower.split())
+        common_words = query_words.intersection(question_words)
+        
+        # Calculate keyword match score
+        keyword_score = len(common_words) / max(len(query_words), len(question_words)) if query_words or question_words else 0
+        
+        # Calculate semantic similarity
+        semantic_score = calculate_similarity(user_query_lower, question_lower)
+        
+        # Combined score (weighted towards keyword matching)
+        combined_score = (keyword_score * 0.7) + (semantic_score * 0.3)
+        
+        # Check for exact phrase matches (boost score)
+        for word in user_query_lower.split():
+            if len(word) > 3 and word in question_lower:
+                combined_score += 0.1
+        
+        # Update best match if this score is higher
+        if combined_score > best_score and combined_score >= similarity_threshold:
+            best_score = combined_score
+            best_match = {
+                'question': item['question'],
+                'answer': item['answer'],
+                'score': combined_score,
+                'id': item.get('id', '')
+            }
+    
+    return best_match
+
+async def get_user_qna_items(user_id):
+    """Fetch all QnA items for a user"""
+    try:
+        cursor = qna_collection.find({"user_id": ObjectId(user_id)}).sort("created_at", -1)
+        qna_items = []
+        async for item in cursor:
+            qna_items.append({
+                "id": str(item["_id"]),
+                "question": item["question"],
+                "answer": item["answer"],
+                "created_at": item["created_at"],
+                "updated_at": item["updated_at"]
+            })
+        return qna_items
+    except Exception as e:
+        print(f"Error fetching QnA items: {e}")
+        return []
 
 @app.post("/chat", response_model=ChatResponse)
 async def chat_endpoint(chat_request: ChatRequest):
@@ -890,6 +1247,115 @@ async def chat_endpoint(chat_request: ChatRequest):
         
         # DEBUG: Log user query
         print(f"Processing chat request. Query: {chat_request.query}")
+        
+        # ===== NEW QnA INTEGRATION =====
+        # Step 1: Check QnA knowledge base first (unless it's a scheduling intent)
+        is_scheduling = await detect_scheduling_intent(chat_request.query)
+        
+        if not is_scheduling:
+            print("Checking QnA knowledge base...")
+            
+            # Fetch user's QnA items
+            qna_items = await get_user_qna_items(user_id)
+            
+            if qna_items:
+                print(f"Found {len(qna_items)} QnA items to search through")
+                
+                # Search for relevant QnA
+                qna_match = search_qna_knowledge(chat_request.query, qna_items)
+                
+                if qna_match:
+                    print(f"Found QnA match with score: {qna_match['score']:.2f}")
+                    print(f"Matched question: {qna_match['question']}")
+                    
+                    # Use QnA answer as base, but enhance it with business context
+                    qna_response = qna_match['answer']
+                    
+                    # Get system prompt if available
+                    system_prompt = ""
+                    if business_settings and business_settings.get('system_prompt'):
+                        system_prompt = business_settings['system_prompt']
+                    
+                    # Create enhanced response using both QnA and system context
+                    enhanced_system_message = f"""You are responding to a user query using knowledge from a Q&A database. 
+
+Based on the user's question: "{chat_request.query}"
+I found this relevant Q&A pair:
+
+Question: {qna_match['question']}
+Answer: {qna_response}
+
+"""
+                    
+                    if system_prompt:
+                        enhanced_system_message += f"Additional business context: {system_prompt}\n\n"
+                    
+                    if business_settings:
+                        business_info = prepare_business_info(business_settings)
+                        enhanced_system_message += f"Business Information:\n{business_info}\n\n"
+                    
+                    enhanced_system_message += """INSTRUCTIONS:
+1. Use the Q&A answer as your primary response
+2. Enhance it with business context if relevant
+3. Keep the response natural and conversational
+4. If the Q&A answer fully addresses the question, you can use it directly
+5. If additional context would be helpful, integrate it smoothly
+6. DO NOT mention that you're using a Q&A database
+7. Make the response feel natural and personalized"""
+
+                    # Check for greeting
+                    has_greeting = check_for_greeting(chat_request.query)
+                    if has_greeting:
+                        enhanced_system_message += "\n\nIMPORTANT: Begin your response with a friendly greeting like 'Hello' or 'Hi there' and include an emoji right after the greeting word (with no space). For example: 'Hello👋' or 'Hi there😊'. The rest of your response should NOT contain any emojis."
+                    else:
+                        enhanced_system_message += "\n\nIMPORTANT: DO NOT begin your message with greeting phrases like 'hello there', 'hi there', etc. DO NOT use emojis in your response."
+
+                    # Create messages for QnA-enhanced response
+                    messages = [
+                        {"role": "system", "content": enhanced_system_message},
+                        {"role": "user", "content": chat_request.query}
+                    ]
+                    
+                    # Check token limits
+                    MAX_TOKENS = 16000
+                    if count_tokens(messages) > MAX_TOKENS:
+                        # Truncate system message if needed
+                        enhanced_system_message = truncate_system_message(enhanced_system_message, 4000)
+                        messages[0]["content"] = enhanced_system_message
+                    
+                    # Make API call for enhanced QnA response
+                    try:
+                        chat_completion = client.chat.completions.create(
+                            model="gpt-3.5-turbo",
+                            messages=messages
+                        )
+                        
+                        qna_enhanced_response = chat_completion.choices[0].message.content
+                        
+                        # Save to database with QnA metadata
+                        await save_chat_to_db(
+                            session_id=chat_request.session_id,
+                            query=chat_request.query,
+                            response=qna_enhanced_response,
+                            is_scheduling=False,
+                            qna_match_id=qna_match.get('id'),
+                            qna_match_score=qna_match['score']
+                        )
+                        
+                        print(f"Responded using QnA knowledge (ID: {qna_match.get('id')})")
+                        return ChatResponse(user_id=user_id, response=qna_enhanced_response)
+                        
+                    except Exception as qna_error:
+                        print(f"Error generating QnA-enhanced response: {qna_error}")
+                        # Fall through to regular chat flow
+                else:
+                    print("No relevant QnA match found, proceeding with regular chat")
+            else:
+                print("No QnA items found for user")
+        else:
+            print("Scheduling intent detected, skipping QnA check")
+        
+        # ===== ORIGINAL CHAT LOGIC CONTINUES =====
         
         # Filter for active services
         active_services = []
@@ -925,13 +1391,6 @@ if user talking in hebrew ask him:
 3. תאריך ושעה סיום
 4. כתובת אימייל
 
-
-
-
-
-
-
-
 IMPORTANT: You CAN and SHOULD book appointments when requested. Use the appointment scheduling function when appropriate.
 Respond in a professional tone."""
 
@@ -940,9 +1399,6 @@ Respond in a professional tone."""
         
         # DEBUG: Log system message beginning
         print(f"System message starts with: {system_message[:100]}...")
-        
-        # Determine intent and process
-        is_scheduling = await detect_scheduling_intent(chat_request.query)
         
         # DEBUG: Log scheduling intent
         print(f"Scheduling intent detected: {is_scheduling}")
@@ -957,8 +1413,8 @@ Respond in a professional tone."""
             # Add active services info explicitly for scheduling
             if active_services:
                 active_services_info = "\n".join(
-                    f"- {s['serviceName']}: {s.get('price', 'N/A')}" 
-                    for s in active_services[:5]  # Limit to 5 services
+                    f"- {s['serviceName']}: {s.get('description', '')}" 
+                    for s in active_services[:9]  # Limit to 9 services
                 )
                 scheduling_system_message += f"\n\nONLY offer these active services for booking:\n{active_services_info}"
             else:
@@ -1061,7 +1517,7 @@ Respond in a professional tone."""
                         # If inactive service detected, return a helpful message
                         inactive_response = "I notice you're interested in a service that isn't currently available. Here are the services we currently offer:\n\n"
                         inactive_response += "\n".join(
-                            f"- {s['serviceName']}: {s.get('price', 'N/A')}" 
+                            f"- {s['serviceName']}: {s.get('description', '')}" 
                             for s in active_services
                         )
                         inactive_response += "\n\nWould you like to book an appointment for one of these services instead?"
@@ -1163,7 +1619,7 @@ Respond in a professional tone."""
                 
                 if active_services:
                     active_services_info = "\n".join(
-                        f"- {s['serviceName']}: {s.get('price', 'N/A')}" 
+                        f"- {s['serviceName']}: {s.get('description', '')}" 
                         for s in active_services[:5]
                     )
                     assist_system_message += f"\n\nACTIVE SERVICES:\n{active_services_info}"
@@ -1187,9 +1643,6 @@ Respond in a professional tone."""
                 
                 # Get text response
                 chat_response = chat_completion.choices[0].message.content
-                
-                # Apply greeting formatting using the functions from paste-2.txt
-        
                 
                 # Save to database
                 await save_chat_to_db(
@@ -1249,7 +1702,6 @@ Respond in a professional tone."""
         # Get the response content
         chat_response = chat_completion.choices[0].message.content
         
-        
         # Save to database
         await save_chat_to_db(
             session_id=chat_request.session_id,
@@ -1264,8 +1716,6 @@ Respond in a professional tone."""
         print(f"Error in chat endpoint: {str(e)}")
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=str(e))
-
-
 
 
 
@@ -1398,3 +1848,252 @@ async def delete_system_prompt(current_user: dict = Depends(get_current_user)):
         return {"message": "System prompt deleted"}
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to delete system prompt: {e}")
+
+
+
+#qna 
+
+
+from fastapi import HTTPException, Depends, Body
+from pydantic import BaseModel
+from typing import List, Optional
+from datetime import datetime
+from bson import ObjectId
+
+# Pydantic Models for QnA
+class QnAItem(BaseModel):
+    question: str
+    answer: str
+
+class QnACreate(BaseModel):
+    question: str
+    answer: str
+
+class QnAUpdate(BaseModel):
+    question: str
+    answer: str
+
+# Initialize QnA collection (add this to your database setup)
+# qna_collection = db["qna_items"]
+
+# QnA CRUD Operations
+
+@app.post("/business-service/qna")
+async def create_qna(
+    qna_data: QnACreate = Body(...),
+    current_user: dict = Depends(get_current_user),
+):
+    """Add a new QnA item"""
+    try:
+        qna_item = {
+            "user_id": current_user["_id"],
+            "question": qna_data.question.strip(),
+            "answer": qna_data.answer.strip(),
+            "created_at": datetime.utcnow(),
+            "updated_at": datetime.utcnow()
+        }
+        
+        result = await qna_collection.insert_one(qna_item)
+        return {
+            "message": "QnA item created successfully",
+            "id": str(result.inserted_id)
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to create QnA item: {e}")
+
+@app.get("/business-service/qna")
+async def get_all_qna(current_user: dict = Depends(get_current_user)):
+    """Get all QnA items for the current user"""
+    try:
+        cursor = qna_collection.find({"user_id": current_user["_id"]}).sort("created_at", -1)
+        qna_items = []
+        
+        async for item in cursor:
+            qna_items.append({
+                "id": str(item["_id"]),
+                "question": item["question"],
+                "answer": item["answer"],
+                "created_at": item["created_at"],
+                "updated_at": item["updated_at"]
+            })
+        
+        return {"qna_items": qna_items}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to fetch QnA items: {e}")
+
+@app.get("/business-service/qna/{qna_id}")
+async def get_qna_by_id(
+    qna_id: str,
+    current_user: dict = Depends(get_current_user)
+):
+    """Get a specific QnA item by ID"""
+    try:
+        if not ObjectId.is_valid(qna_id):
+            raise HTTPException(status_code=400, detail="Invalid QnA ID")
+        
+        qna_item = await qna_collection.find_one({
+            "_id": ObjectId(qna_id),
+            "user_id": current_user["_id"]
+        })
+        
+        if not qna_item:
+            raise HTTPException(status_code=404, detail="QnA item not found")
+        
+        return {
+            "id": str(qna_item["_id"]),
+            "question": qna_item["question"],
+            "answer": qna_item["answer"],
+            "created_at": qna_item["created_at"],
+            "updated_at": qna_item["updated_at"]
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to fetch QnA item: {e}")
+
+@app.put("/business-service/qna/{qna_id}")
+async def update_qna(
+    qna_id: str,
+    qna_data: QnAUpdate = Body(...),
+    current_user: dict = Depends(get_current_user)
+):
+    """Update a specific QnA item"""
+    try:
+        if not ObjectId.is_valid(qna_id):
+            raise HTTPException(status_code=400, detail="Invalid QnA ID")
+        
+        update_data = {
+            "question": qna_data.question.strip(),
+            "answer": qna_data.answer.strip(),
+            "updated_at": datetime.utcnow()
+        }
+        
+        result = await qna_collection.update_one(
+            {"_id": ObjectId(qna_id), "user_id": current_user["_id"]},
+            {"$set": update_data}
+        )
+        
+        if result.matched_count == 0:
+            raise HTTPException(status_code=404, detail="QnA item not found")
+        
+        return {"message": "QnA item updated successfully"}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to update QnA item: {e}")
+
+@app.delete("/business-service/qna/{qna_id}")
+async def delete_qna(
+    qna_id: str,
+    current_user: dict = Depends(get_current_user)
+):
+    """Delete a specific QnA item"""
+    try:
+        if not ObjectId.is_valid(qna_id):
+            raise HTTPException(status_code=400, detail="Invalid QnA ID")
+        
+        result = await qna_collection.delete_one({
+            "_id": ObjectId(qna_id),
+            "user_id": current_user["_id"]
+        })
+        
+        if result.deleted_count == 0:
+            raise HTTPException(status_code=404, detail="QnA item not found")
+        
+        return {"message": "QnA item deleted successfully"}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to delete QnA item: {e}")
+
+@app.delete("/business-service/qna")
+async def delete_all_qna(current_user: dict = Depends(get_current_user)):
+    """Delete all QnA items for the current user"""
+    try:
+        result = await qna_collection.delete_many({"user_id": current_user["_id"]})
+        return {
+            "message": f"Deleted {result.deleted_count} QnA items successfully",
+            "deleted_count": result.deleted_count
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to delete QnA items: {e}")
+
+# Bulk operations for QnA
+@app.post("/business-service/qna/bulk")
+async def create_bulk_qna(
+    qna_items: List[QnACreate] = Body(...),
+    current_user: dict = Depends(get_current_user)
+):
+    """Create multiple QnA items at once"""
+    try:
+        if not qna_items:
+            raise HTTPException(status_code=400, detail="No QnA items provided")
+        
+        if len(qna_items) > 100:  # Reasonable limit
+            raise HTTPException(status_code=400, detail="Maximum 100 QnA items allowed per bulk operation")
+        
+        bulk_items = []
+        for item in qna_items:
+            if not item.question.strip() or not item.answer.strip():
+                raise HTTPException(status_code=400, detail="Question and answer cannot be empty")
+            
+            bulk_items.append({
+                "user_id": current_user["_id"],
+                "question": item.question.strip(),
+                "answer": item.answer.strip(),
+                "created_at": datetime.utcnow(),
+                "updated_at": datetime.utcnow()
+            })
+        
+        result = await qna_collection.insert_many(bulk_items)
+        return {
+            "message": f"Created {len(result.inserted_ids)} QnA items successfully",
+            "created_count": len(result.inserted_ids),
+            "ids": [str(id) for id in result.inserted_ids]
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to create bulk QnA items: {e}")
+
+# Search QnA items
+@app.get("/business-service/qna/search")
+async def search_qna(
+    q: str,
+    current_user: dict = Depends(get_current_user)
+):
+    """Search QnA items by question or answer content"""
+    try:
+        if not q.strip():
+            raise HTTPException(status_code=400, detail="Search query cannot be empty")
+        
+        # Create text search query
+        search_regex = {"$regex": q.strip(), "$options": "i"}
+        
+        cursor = qna_collection.find({
+            "user_id": current_user["_id"],
+            "$or": [
+                {"question": search_regex},
+                {"answer": search_regex}
+            ]
+        }).sort("created_at", -1)
+        
+        qna_items = []
+        async for item in cursor:
+            qna_items.append({
+                "id": str(item["_id"]),
+                "question": item["question"],
+                "answer": item["answer"],
+                "created_at": item["created_at"],
+                "updated_at": item["updated_at"]
+            })
+        
+        return {
+            "qna_items": qna_items,
+            "search_query": q,
+            "total_results": len(qna_items)
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to search QnA items: {e}")
