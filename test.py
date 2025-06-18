@@ -18,17 +18,3 @@
 
 
 
-from openai import OpenAI
-client = OpenAI(api_key="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")
-
-completion = client.chat.completions.create(
-    model="gpt-3.5-turbo",
-    messages=[
-        {
-            "role": "user",
-            "content": "Write a one-sentence bedtime story about a unicorn."
-        }
-    ]
-)
-
-print(completion.choices[0].message.content)
