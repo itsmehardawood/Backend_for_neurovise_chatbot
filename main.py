@@ -88,7 +88,71 @@ chat_sessions_collection = db.chat_sessions
 qna_collection = db.qna
 
 
+# Add these helper functions to your main.py file (after imports, before endpoints)
 
+def is_simple_greeting(text):
+    """Simple greeting detection - no AI needed"""
+    greetings = [
+        'hi', 'hello', 'hey', 'yo', 'greetings', 'good morning', 'good evening',
+        'שלום', 'היי', 'בוקר טוב', 'ערב טוב', 'שלום לך'
+    ]
+    text_clean = text.strip().lower()
+    return any(text_clean.startswith(greeting) for greeting in greetings)
+
+def has_scheduling_keywords(text):
+    """Simple keyword detection - no AI needed"""
+    keywords = [
+        'schedule', 'book', 'appointment', 'reserve', 'meet', 'calendar', 
+        'when can', 'available', 'תור', 'לקבוע', 'פגישה', 'זמין', 'מתי'
+    ]
+    text_lower = text.lower()
+    return any(keyword in text_lower for keyword in keywords)
+
+def is_service_inquiry(text):
+    """Simple service inquiry detection"""
+    keywords = [
+        'services', 'service', 'offer', 'providing', 'do you have', 
+        'what do you do', 'what do you provide', 'options',
+        'שירותים', 'שירות', 'מה אתם', 'מה תן', 'איך אתם'
+    ]
+    text_lower = text.lower()
+    return any(keyword in text_lower for keyword in keywords)
+
+
+# Also add this to your twilio_routes.py file:
+def prepare_whatsapp_system_message(business_settings, user_query):
+    """
+    Single optimized system message for WhatsApp that handles everything
+    """
+    base_message = """You are a friendly WhatsApp business assistant. Rules:
+
+LANGUAGE: Default Hebrew (unless user requests English)
+
+AUTO-RESPONSES:
+- Greeting (hi/hello/hey) → Start with greeting + emoji: "שלום👋" or "Hello👋"
+- Service inquiry → List available services naturally
+- Scheduling → Ask for details or use function if provided
+
+SCHEDULING FORMAT:
+Hebrew: "האם תוכל לספק את הפרטים הבאים? 1. נושא הפגישה 2. תאריך ושעת התחלה 3. תאריך ושעה סיום 4. כתובת אימייל"
+English: "Can you provide: 1. Meeting topic 2. Start date/time 3. End date/time 4. Email address"
+
+STYLE: Conversational, human-like, brief (like texting)"""
+
+    if business_settings:
+        if business_settings.get('system_prompt'):
+            base_message += f"\n\nBUSINESS: {business_settings['system_prompt']}"
+        
+        active_services = [s for s in business_settings.get('services', []) if s.get('isActive', True)]
+        if active_services:
+            services = "\n".join(f"- {s['serviceName']}: {s.get('description', '')[:60]}..." 
+                               for s in active_services[:5])
+            base_message += f"\n\nSERVICES:\n{services}"
+        
+        tone = business_settings.get('chat_tone', 'friendly')
+        base_message += f"\nTONE: {tone}"
+    
+    return truncate_system_message(base_message, 2500)
 # ─── UTILS ─────────────────────────────────────────────────────────────────────
 def hash_password(password: str) -> str:
     return bcrypt.hashpw(password.encode(), bcrypt.gensalt()).decode()
@@ -670,7 +734,7 @@ async def save_chat_to_db(session_id, query, response, is_scheduling=False, even
         traceback.print_exc()
         # Don't raise exception as this shouldn't break the chat flow
 
-
+#---------------------------------------VECTOR STORES APPLYING--------------------
 
 import tiktoken
 from typing import List, Dict, Any, Optional
@@ -751,405 +815,6 @@ def prepare_business_info(business_settings: dict, max_tokens: int = 4000) -> st
     # Ensure the system message fits within token limit
     return truncate_system_message(system_message, max_tokens)
 
-# @app.post("/chat", response_model=ChatResponse)
-# async def chat_endpoint(chat_request: ChatRequest):
-#     try:
-#         # Validate session and user
-#         session = await chat_sessions_collection.find_one({"session_id": chat_request.session_id})
-#         if not session:
-#             raise HTTPException(status_code=404, detail="Session not found")
-        
-#         user_id = chat_request.user_id or session.get("user_id")
-#         if not user_id:
-#             raise HTTPException(status_code=400, detail="User ID required")
-
-#         user = await users_collection.find_one({"_id": ObjectId(user_id)})
-#         if not user:
-#             raise HTTPException(status_code=404, detail="User not found")
-
-#         # Get business settings
-#         business_settings = await business_settings_collection.find_one({"user_id": ObjectId(user_id)})
-        
-#         # DEBUG: Log user query
-#         print(f"Processing chat request. Query: {chat_request.query}")
-        
-#         # Filter for active services
-#         active_services = []
-#         if business_settings and business_settings.get('services'):
-#             active_services = [s for s in business_settings['services'] if s.get('isActive', True)]
-#             print(f"Found {len(active_services)} active services out of {len(business_settings.get('services', []))} total services")
-        
-#         # Prepare system message - prioritize business settings
-#         if business_settings:
-#             # Add debugging info about business settings
-#             print(f"Found business settings: {business_settings.get('name', 'Unnamed Business')}")
-            
-#             # Use the token-aware function to prepare business info
-#             system_message = prepare_business_info(business_settings)
-            
-#             # Enhanced system prompt for better appointment handling
-#             system_message += "\n\nIMPORTANT: You are a virtual assistant that helps with booking appointments. If a user wants to schedule an appointment, help them by collecting the necessary information and use the provided function to create a calendar event. ONLY discuss and recommend ACTIVE services listed above."
-#         else:
-#             # Default system message when no business settings exist
-#             system_message = """You are a helpful assistant that manages appointments. 
-# For appointment scheduling, please collect:
-# Can you provide the following details?
-# 1. Meeting topic
-# 2. Start date and time
-# 3. End date and time
-# 4. email address
-
-# if user talking in hebrew ask him: 
-
-# האם תוכל לספק את הפרטים הבאים?
-# 1. נושא הפגישה
-# 2. תאריך ושעת התחלה
-# 3. תאריך ושעה סיום
-# 4. כתובת אימייל
-
-
-
-
-
-
-
-
-# IMPORTANT: You CAN and SHOULD book appointments when requested. Use the appointment scheduling function when appropriate.
-# Respond in a professional tone."""
-
-#         # Set max tokens limit with buffer
-#         MAX_TOKENS = 16000  # Lower than the actual limit of 16385
-        
-#         # DEBUG: Log system message beginning
-#         print(f"System message starts with: {system_message[:100]}...")
-        
-#         # Determine intent and process
-#         is_scheduling = await detect_scheduling_intent(chat_request.query)
-        
-#         # DEBUG: Log scheduling intent
-#         print(f"Scheduling intent detected: {is_scheduling}")
-        
-#         if is_scheduling:
-#             # DEBUG: Log entering scheduling flow
-#             print("Entering scheduling flow...")
-            
-#             # Enhanced system message specific for scheduling
-#             scheduling_system_message = system_message
-            
-#             # Add active services info explicitly for scheduling
-#             if active_services:
-#                 active_services_info = "\n".join(
-#                     f"- {s['serviceName']}: {s.get('description', '')}" 
-#                     for s in active_services[:9]  # Limit to 5 services
-#                 )
-#                 scheduling_system_message += f"\n\nONLY offer these active services for booking:\n{active_services_info}"
-#             else:
-#                 scheduling_system_message += "\n\nThere are no specific services defined. Schedule a general appointment."
-            
-#             scheduling_system_message += "\n\nThe user is trying to schedule an appointment. Help them by collecting all necessary information and use the create_calendar_event function to book it. DO NOT refuse to book appointments - that is your primary function. ONLY discuss and recommend ACTIVE services."
-            
-#             # Define the function call with calendar event schema
-#             calendar_function = {
-#                 "type": "function",
-#                 "function": {
-#                     "name": "create_calendar_event",
-#                     "description": "Schedule a calendar appointment",
-#                     "parameters": {
-#                         "type": "object",
-#                         "properties": {
-#                             "summary": {"type": "string", "description": "The topic of the meeting"},
-#                             "start_datetime": {"type": "string", "description": "Start time in ISO format (YYYY-MM-DDTHH:MM:SS)"},
-#                             "end_datetime": {"type": "string", "description": "End time in ISO format (YYYY-MM-DDTHH:MM:SS)"},
-#                             "description": {"type": "string", "description": "Additional details about the appointment"},
-#                             "attendees": {
-#                                 "type": "array",
-#                                 "items": {"type": "string", "format": "email"},
-#                                 "description": "List of email addresses for attendees"
-#                             }
-#                         },
-#                         "required": ["summary", "start_datetime", "end_datetime"]
-#                     }
-#                 }
-#             }
-            
-#             # Create messages array
-#             messages = [
-#                 {"role": "system", "content": scheduling_system_message},
-#                 {"role": "user", "content": chat_request.query}
-#             ]
-            
-#             # Check if token count exceeds limit
-#             message_tokens = count_tokens(messages)
-#             if message_tokens > MAX_TOKENS:
-#                 # Calculate how much we need to reduce
-#                 excess_tokens = message_tokens - MAX_TOKENS + 500  # Buffer
-                
-#                 # Recalculate with a shorter system message
-#                 max_system_tokens = len(encoder.encode(scheduling_system_message)) - excess_tokens
-#                 if max_system_tokens < 500:  # Minimum viable system message
-#                     max_system_tokens = 500
-                
-#                 scheduling_system_message = truncate_system_message(scheduling_system_message, max_system_tokens)
-#                 messages[0]["content"] = scheduling_system_message
-                
-#                 # Verify we're now within limits
-#                 if count_tokens(messages) > MAX_TOKENS:
-#                     # As a last resort, truncate the user query
-#                     user_tokens = len(encoder.encode(chat_request.query))
-#                     if user_tokens > 1000:  # Only truncate if it's long
-#                         max_query_tokens = user_tokens - (count_tokens(messages) - MAX_TOKENS) - 100
-#                         truncated_query = encoder.decode(encoder.encode(chat_request.query)[:max_query_tokens])
-#                         truncated_query += " [message truncated]"
-#                         messages[1]["content"] = truncated_query
-            
-#             # DEBUG: Log messages before API call
-#             print(f"Making scheduling API call with message tokens: {count_tokens(messages)}")
-            
-#             # Make the API call with token-managed messages
-#             response = client.chat.completions.create(
-#                 model="gpt-3.5-turbo",
-#                 messages=messages,
-#                 tools=[calendar_function],
-#                 tool_choice="auto"  # Explicitly tell the model to use tools when appropriate
-#             )
-
-#             # DEBUG: Log basic response info
-#             print(f"Received response. Contains tool calls: {hasattr(response.choices[0].message, 'tool_calls') and bool(response.choices[0].message.tool_calls)}")
-            
-#             message = response.choices[0].message
-            
-#             # Check for tool calls from the API response
-#             if message.tool_calls:
-#                 try:
-#                     # DEBUG: Log tool call details
-#                     print(f"Tool call received: {message.tool_calls[0].function.name}")
-                    
-#                     event_data = json.loads(message.tool_calls[0].function.arguments)
-#                     print(f"Event data: {event_data}")
-                    
-#                     # Validate that the requested service is active (if service is specified)
-#                     is_valid_service = True
-#                     if event_data.get('description') and business_settings and business_settings.get('services'):
-#                         # Basic check if the description contains an inactive service name
-#                         inactive_service_names = [s['serviceName'].lower() for s in business_settings.get('services', []) 
-#                                             if not s.get('isActive', True)]
-                        
-#                         for inactive_service in inactive_service_names:
-#                             if inactive_service in event_data.get('description', '').lower():
-#                                 is_valid_service = False
-#                                 break
-                    
-#                     if not is_valid_service:
-#                         # If inactive service detected, return a helpful message
-#                         inactive_response = "I notice you're interested in a service that isn't currently available. Here are the services we currently offer:\n\n"
-#                         inactive_response += "\n".join(
-#                             f"- {s['serviceName']}: {s.get('description', '')}" 
-#                             for s in active_services
-#                         )
-#                         inactive_response += "\n\nWould you like to book an appointment for one of these services instead?"
-                        
-#                         await save_chat_to_db(
-#                             session_id=chat_request.session_id,
-#                             query=chat_request.query,
-#                             response=inactive_response,
-#                             is_scheduling=True
-#                         )
-                        
-#                         return ChatResponse(
-#                             user_id=user_id,
-#                             response=inactive_response
-#                         )
-                    
-#                     event_data['summary'] = event_data.get('summary') or "Appointment"
-                    
-#                     # Make sure we have both attendees and user email if available
-#                     if 'attendees' not in event_data:
-#                         event_data['attendees'] = []
-                    
-#                     if user.get('email') and user['email'] not in event_data['attendees']:
-#                         event_data['attendees'].append(user['email'])
-                    
-#                     # Create the calendar event
-#                     event_result = create_calendar_event(EventRequest(**event_data))
-                    
-#                     if event_result["status"] == "success":
-#                         # Format a friendly response for successful scheduling
-#                         start_datetime = event_data['start_datetime'].replace('T', ' at ').split('+')[0]
-                        
-#                         response_text = f"Great! I've scheduled your appointment:\n\n"
-#                         response_text += f"📅 {event_data['summary']}\n"
-#                         response_text += f"🕒 {start_datetime}\n"
-                        
-#                         if event_data.get('description'):
-#                             response_text += f"📝 {event_data['description']}\n"
-                        
-#                         if event_result.get('meet_link'):
-#                             response_text += f"\n🔗 Video call link: {event_result['meet_link']}"
-                        
-#                         # Add confirmation number
-#                         response_text += f"\n\nConfirmation #: {event_result['event_id'][-6:]}"
-                        
-#                         # Save to database before returning
-#                         await save_chat_to_db(
-#                             session_id=chat_request.session_id,
-#                             query=chat_request.query,
-#                             response=response_text,
-#                             is_scheduling=True,
-#                             event_details=event_result
-#                         )
-                        
-#                         return ChatResponse(
-#                             user_id=user_id,
-#                             response=response_text,
-#                             event_details=event_result
-#                         )
-#                     else:
-#                         error_response = f"I tried to schedule your appointment, but encountered an error: {event_result.get('message')}"
-#                         await save_chat_to_db(
-#                             session_id=chat_request.session_id,
-#                             query=chat_request.query,
-#                             response=error_response,
-#                             is_scheduling=True
-#                         )
-#                         return ChatResponse(
-#                             user_id=user_id,
-#                             response=error_response
-#                         )
-#                 except Exception as tool_error:
-#                     # Log the specific error with the tool call
-#                     print(f"Error processing tool call: {str(tool_error)}")
-#                     traceback.print_exc()
-                    
-#                     # Fall back to regular response
-#                     fallback_response = f"I encountered an issue while trying to schedule your appointment: {str(tool_error)}. Please try again with complete details including date, time, and purpose."
-                    
-#                     await save_chat_to_db(
-#                         session_id=chat_request.session_id,
-#                         query=chat_request.query,
-#                         response=fallback_response,
-#                         is_scheduling=True
-#                     )
-                    
-#                     return ChatResponse(
-#                         user_id=user_id,
-#                         response=fallback_response
-#                     )
-#             else:
-#                 # The model didn't use the function, but we know it's a scheduling intent
-#                 # Let's get more information and proceed with normal chat flow
-#                 print("Model didn't use tool call despite scheduling intent. Using regular chat response.")
-                
-#                 # If the API didn't use the tool, we'll use a modified system message
-#                 # that encourages getting the details for next time
-#                 assist_system_message = system_message + "\n\nThe user wants to schedule an appointment. If you don't have enough details yet, ask Can I help you with a specific topic? like date, time, and purpose. DO NOT refuse to help with scheduling - that is your primary purpose. Never say you cannot book appointments. ONLY mention active services."
-                
-#                 if active_services:
-#                     active_services_info = "\n".join(
-#                         f"- {s['serviceName']}: {s.get('description', '')}" 
-#                         for s in active_services[:5]
-#                     )
-#                     assist_system_message += f"\n\nACTIVE SERVICES:\n{active_services_info}"
-                
-#                 messages = [
-#                     {"role": "system", "content": assist_system_message},
-#                     {"role": "user", "content": chat_request.query}
-#                 ]
-                
-#                 # Check token count for regular messages
-#                 if count_tokens(messages) > MAX_TOKENS:
-#                     # Apply token reduction as before
-#                     assist_system_message = truncate_system_message(assist_system_message, 4000)
-#                     messages[0]["content"] = assist_system_message
-                
-#                 # Use regular chat completion to ask for more details
-#                 chat_completion = client.chat.completions.create(
-#                     model="gpt-3.5-turbo",
-#                     messages=messages
-#                 )
-                
-#                 # Get text response
-#                 chat_response = chat_completion.choices[0].message.content
-                
-#                 # Apply greeting formatting using the functions from paste-2.txt
-        
-                
-#                 # Save to database
-#                 await save_chat_to_db(
-#                     session_id=chat_request.session_id,
-#                     query=chat_request.query,
-#                     response=chat_response,
-#                     is_scheduling=True
-#                 )
-                
-#                 return ChatResponse(user_id=user_id, response=chat_response)
-        
-#         # Regular chat flow (non-scheduling intent)
-#         print("Using regular chat flow...")
-        
-#         # Check if we should add greeting formatting
-#         has_greeting = check_for_greeting(chat_request.query)
-        
-#         # Add greeting instructions if needed
-#         if has_greeting:
-#             system_message += "\n\nIMPORTANT: Begin your response with a friendly greeting like 'Hello' or 'Hi there' and include an emoji right after the greeting word (with no space). For example: 'Hello👋' or 'Hi there😊'. The rest of your response should NOT contain any emojis."
-#         else:
-#             system_message += "\n\nIMPORTANT: DO NOT begin your message with greeting phrases like 'hello there', 'hi there', etc. DO NOT use emojis in your response."
-        
-#         # Create messages for regular chat flow
-#         messages = [
-#             {"role": "system", "content": system_message},
-#             {"role": "user", "content": chat_request.query}
-#         ]
-        
-#         # Check token count for regular messages
-#         message_tokens = count_tokens(messages)
-#         if message_tokens > MAX_TOKENS:
-#             # Apply same token reduction logic as before
-#             excess_tokens = message_tokens - MAX_TOKENS + 500  # Buffer
-#             max_system_tokens = len(encoder.encode(system_message)) - excess_tokens
-#             if max_system_tokens < 500:
-#                 max_system_tokens = 500
-            
-#             system_message = truncate_system_message(system_message, max_system_tokens)
-#             messages[0]["content"] = system_message
-            
-#             # If still too large, truncate user query as last resort
-#             if count_tokens(messages) > MAX_TOKENS:
-#                 user_tokens = len(encoder.encode(chat_request.query))
-#                 if user_tokens > 1000:
-#                     max_query_tokens = user_tokens - (count_tokens(messages) - MAX_TOKENS) - 100
-#                     truncated_query = encoder.decode(encoder.encode(chat_request.query)[:max_query_tokens])
-#                     truncated_query += " [message truncated]"
-#                     messages[1]["content"] = truncated_query
-        
-#         # Make regular chat API call
-#         chat_completion = client.chat.completions.create(
-#             model="gpt-3.5-turbo",
-#             messages=messages
-#         )
-        
-#         # Get the response content
-#         chat_response = chat_completion.choices[0].message.content
-        
-        
-#         # Save to database
-#         await save_chat_to_db(
-#             session_id=chat_request.session_id,
-#             query=chat_request.query,
-#             response=chat_response,
-#             is_scheduling=is_scheduling
-#         )
-
-#         return ChatResponse(user_id=user_id, response=chat_response)
-
-#     except Exception as e:
-#         print(f"Error in chat endpoint: {str(e)}")
-#         traceback.print_exc()
-#         raise HTTPException(status_code=500, detail=str(e))
-
-
-
-
 #new chat
 
 
@@ -1226,204 +891,164 @@ async def get_user_qna_items(user_id):
         print(f"Error fetching QnA items: {e}")
         return []
 
+
+def prepare_optimized_system_message(business_settings, user_query, max_tokens=3000):
+    """
+    Optimized system message that handles everything in one go:
+    - Greetings with emojis
+    - Service inquiries
+    - Scheduling detection
+    - Business context
+    """
+    
+    # Base system message with all instructions
+    base_message = """You are a friendly business assistant. Follow these rules:
+
+GREETING & EMOJI RULES:
+- If user sends greeting (hi, hello, hey): Start response with greeting + emoji (Hello👋, Hi😊, Hey✨)
+- For non-greetings: No greeting phrases, no emojis
+
+SCHEDULING DETECTION:
+- If user wants to schedule/book/appointment: Use create_calendar_event function
+- Collect: topic, start_datetime (ISO format), end_datetime, attendees
+- Hebrew prompt: "האם תוכל לספק את הפרטים הבאים? 1. נושא הפגישה 2. תאריך ושעת התחלה 3. תאריך ושעה סיום 4. כתובת אימייל"
+- English prompt: "Can you provide: 1. Meeting topic 2. Start date/time 3. End date/time 4. Email address"
+
+CONVERSATION STYLE:
+- Sound human, not robotic
+- Use contractions (I'm, you're, we'll)
+- Be concise like texting
+- Avoid "How can I assist you?" phrases
+- Default language: Hebrew (unless user requests English)"""
+
+    # Add business context if available
+    if business_settings:
+        # Custom prompt
+        if business_settings.get('system_prompt'):
+            base_message += f"\n\nBUSINESS CONTEXT:\n{business_settings['system_prompt']}"
+        
+        # Active services only
+        active_services = [s for s in business_settings.get('services', []) if s.get('isActive', True)]
+        if active_services:
+            services_info = "\n".join(f"- {s['serviceName']}: {s.get('description', '')[:80]}..." 
+                                    for s in active_services[:5])
+            base_message += f"\n\nAVAILABLE SERVICES (active only):\n{services_info}"
+            base_message += "\nONLY discuss/recommend ACTIVE services listed above."
+        
+        # Tone
+        tone = business_settings.get('chat_tone', 'professional')
+        base_message += f"\n\nTONE: {tone}"
+    else:
+        base_message += "\n\nNo specific services configured. Help with general inquiries and scheduling."
+    
+    # Truncate if too long
+    return truncate_system_message(base_message, max_tokens)
+
+
 @app.post("/chat", response_model=ChatResponse)
 async def chat_endpoint(chat_request: ChatRequest):
+    """
+    Optimized chat endpoint - single OpenAI call with proper error handling
+    """
     try:
-        # Validate session and user
+        # Validate session
         session = await chat_sessions_collection.find_one({"session_id": chat_request.session_id})
         if not session:
             raise HTTPException(status_code=404, detail="Session not found")
         
+        # Get user_id from request or session
         user_id = chat_request.user_id or session.get("user_id")
         if not user_id:
             raise HTTPException(status_code=400, detail="User ID required")
 
-        user = await users_collection.find_one({"_id": ObjectId(user_id)})
+        # Validate user exists
+        try:
+            user = await users_collection.find_one({"_id": ObjectId(user_id)})
+        except Exception as e:
+            print(f"Error finding user with ID {user_id}: {e}")
+            raise HTTPException(status_code=400, detail="Invalid user ID format")
+            
         if not user:
             raise HTTPException(status_code=404, detail="User not found")
+
+        print(f"Processing chat for user: {user_id}")
 
         # Get business settings
         business_settings = await business_settings_collection.find_one({"user_id": ObjectId(user_id)})
         
-        # DEBUG: Log user query
-        print(f"Processing chat request. Query: {chat_request.query}")
-        
-        # ===== NEW QnA INTEGRATION =====
-        # Step 1: Check QnA knowledge base first (unless it's a scheduling intent)
-        is_scheduling = await detect_scheduling_intent(chat_request.query)
-        
-        if not is_scheduling:
-            print("Checking QnA knowledge base...")
-            
-            # Fetch user's QnA items
+        # Check QnA knowledge base first (non-scheduling queries only)
+        if not has_scheduling_keywords(chat_request.query):
             qna_items = await get_user_qna_items(user_id)
-            
             if qna_items:
-                print(f"Found {len(qna_items)} QnA items to search through")
-                
-                # Search for relevant QnA
                 qna_match = search_qna_knowledge(chat_request.query, qna_items)
-                
                 if qna_match:
-                    print(f"Found QnA match with score: {qna_match['score']:.2f}")
-                    print(f"Matched question: {qna_match['question']}")
+                    print(f"Using QnA match: {qna_match['question']}")
+                    # Enhanced QnA response with business context
+                    system_message = f"""Use this Q&A knowledge:
+Q: {qna_match['question']}
+A: {qna_match['answer']}
+
+Enhance with business context if relevant. Sound natural and conversational."""
                     
-                    # Use QnA answer as base, but enhance it with business context
-                    qna_response = qna_match['answer']
-                    
-                    # Get system prompt if available
-                    system_prompt = ""
                     if business_settings and business_settings.get('system_prompt'):
-                        system_prompt = business_settings['system_prompt']
+                        system_message += f"\nBusiness context: {business_settings['system_prompt']}"
                     
-                    # Create enhanced response using both QnA and system context
-                    enhanced_system_message = f"""You are responding to a user query using knowledge from a Q&A database. 
-
-Based on the user's question: "{chat_request.query}"
-I found this relevant Q&A pair:
-
-Question: {qna_match['question']}
-Answer: {qna_response}
-
-"""
+                    # Simple greeting check
+                    if is_simple_greeting(chat_request.query):
+                        system_message += "\nStart with greeting + emoji (Hello👋)"
                     
-                    if system_prompt:
-                        enhanced_system_message += f"Additional business context: {system_prompt}\n\n"
-                    
-                    if business_settings:
-                        business_info = prepare_business_info(business_settings)
-                        enhanced_system_message += f"Business Information:\n{business_info}\n\n"
-                    
-                    enhanced_system_message += """INSTRUCTIONS:
-1. Use the Q&A answer as your primary response
-2. Enhance it with business context if relevant
-3. Keep the response natural and conversational
-4. If the Q&A answer fully addresses the question, you can use it directly
-5. If additional context would be helpful, integrate it smoothly
-6. DO NOT mention that you're using a Q&A database
-7. Make the response feel natural and personalized"""
-
-                    # Check for greeting
-                    has_greeting = check_for_greeting(chat_request.query)
-                    if has_greeting:
-                        enhanced_system_message += "\n\nIMPORTANT: Begin your response with a friendly greeting like 'Hello' or 'Hi there' and include an emoji right after the greeting word (with no space). For example: 'Hello👋' or 'Hi there😊'. The rest of your response should NOT contain any emojis."
-                    else:
-                        enhanced_system_message += "\n\nIMPORTANT: DO NOT begin your message with greeting phrases like 'hello there', 'hi there', etc. DO NOT use emojis in your response."
-
-                    # Create messages for QnA-enhanced response
                     messages = [
-                        {"role": "system", "content": enhanced_system_message},
+                        {"role": "system", "content": system_message},
                         {"role": "user", "content": chat_request.query}
                     ]
                     
-                    # Check token limits
-                    MAX_TOKENS = 16000
-                    if count_tokens(messages) > MAX_TOKENS:
-                        # Truncate system message if needed
-                        enhanced_system_message = truncate_system_message(enhanced_system_message, 4000)
-                        messages[0]["content"] = enhanced_system_message
-                    
-                    # Make API call for enhanced QnA response
                     try:
-                        chat_completion = client.chat.completions.create(
+                        response = client.chat.completions.create(
                             model="gpt-3.5-turbo",
                             messages=messages
                         )
                         
-                        qna_enhanced_response = chat_completion.choices[0].message.content
+                        qna_response = response.choices[0].message.content
                         
-                        # Save to database with QnA metadata
                         await save_chat_to_db(
                             session_id=chat_request.session_id,
                             query=chat_request.query,
-                            response=qna_enhanced_response,
-                            is_scheduling=False,
+                            response=qna_response,
                             qna_match_id=qna_match.get('id'),
                             qna_match_score=qna_match['score']
                         )
                         
-                        print(f"Responded using QnA knowledge (ID: {qna_match.get('id')})")
-                        return ChatResponse(user_id=user_id, response=qna_enhanced_response)
+                        return ChatResponse(user_id=user_id, response=qna_response)
                         
-                    except Exception as qna_error:
-                        print(f"Error generating QnA-enhanced response: {qna_error}")
-                        # Fall through to regular chat flow
-                else:
-                    print("No relevant QnA match found, proceeding with regular chat")
-            else:
-                print("No QnA items found for user")
-        else:
-            print("Scheduling intent detected, skipping QnA check")
-        
-        # ===== ORIGINAL CHAT LOGIC CONTINUES =====
-        
-        # Filter for active services
-        active_services = []
-        if business_settings and business_settings.get('services'):
-            active_services = [s for s in business_settings['services'] if s.get('isActive', True)]
-            print(f"Found {len(active_services)} active services out of {len(business_settings.get('services', []))} total services")
-        
-        # Prepare system message - prioritize business settings
-        if business_settings:
-            # Add debugging info about business settings
-            print(f"Found business settings: {business_settings.get('name', 'Unnamed Business')}")
-            
-            # Use the token-aware function to prepare business info
-            system_message = prepare_business_info(business_settings)
-            
-            # Enhanced system prompt for better appointment handling
-            system_message += "\n\nIMPORTANT: You are a virtual assistant that helps with booking appointments. If a user wants to schedule an appointment, help them by collecting the necessary information and use the provided function to create a calendar event. ONLY discuss and recommend ACTIVE services listed above."
-        else:
-            # Default system message when no business settings exist
-            system_message = """You are a helpful assistant that manages appointments. 
-For appointment scheduling, please collect:
-Can you provide the following details?
-1. Meeting topic
-2. Start date and time
-3. End date and time
-4. email address
+                    except Exception as e:
+                        print(f"Error in QnA response generation: {e}")
+                        # Fall through to regular chat
 
-if user talking in hebrew ask him: 
-
-האם תוכל לספק את הפרטים הבאים?
-1. נושא הפגישה
-2. תאריך ושעת התחלה
-3. תאריך ושעה סיום
-4. כתובת אימייל
-
-IMPORTANT: You CAN and SHOULD book appointments when requested. Use the appointment scheduling function when appropriate.
-Respond in a professional tone."""
-
-        # Set max tokens limit with buffer
-        MAX_TOKENS = 16000  # Lower than the actual limit of 16385
+        # Prepare optimized system message
+        system_message = prepare_optimized_system_message(business_settings, chat_request.query)
         
-        # DEBUG: Log system message beginning
-        print(f"System message starts with: {system_message[:100]}...")
+        # Create messages
+        messages = [
+            {"role": "system", "content": system_message},
+            {"role": "user", "content": chat_request.query}
+        ]
         
-        # DEBUG: Log scheduling intent
-        print(f"Scheduling intent detected: {is_scheduling}")
+        # Token management
+        MAX_TOKENS = 15000
+        if count_tokens(messages) > MAX_TOKENS:
+            system_message = truncate_system_message(system_message, 3000)
+            messages[0]["content"] = system_message
+
+        # Prepare API parameters
+        api_params = {
+            "model": "gpt-3.5-turbo",
+            "messages": messages
+        }
         
-        if is_scheduling:
-            # DEBUG: Log entering scheduling flow
-            print("Entering scheduling flow...")
-            
-            # Enhanced system message specific for scheduling
-            scheduling_system_message = system_message
-            
-            # Add active services info explicitly for scheduling
-            if active_services:
-                active_services_info = "\n".join(
-                    f"- {s['serviceName']}: {s.get('description', '')}" 
-                    for s in active_services[:9]  # Limit to 9 services
-                )
-                scheduling_system_message += f"\n\nONLY offer these active services for booking:\n{active_services_info}"
-            else:
-                scheduling_system_message += "\n\nThere are no specific services defined. Schedule a general appointment."
-            
-            scheduling_system_message += "\n\nThe user is trying to schedule an appointment. Help them by collecting all necessary information and use the create_calendar_event function to book it. DO NOT refuse to book appointments - that is your primary function. ONLY discuss and recommend ACTIVE services."
-            
-            # Define the function call with calendar event schema
-            calendar_function = {
+        # Add tools only if scheduling keywords detected
+        if has_scheduling_keywords(chat_request.query):
+            print("Scheduling keywords detected, adding tools")
+            api_params["tools"] = [{
                 "type": "function",
                 "function": {
                     "name": "create_calendar_event",
@@ -1431,301 +1056,100 @@ Respond in a professional tone."""
                     "parameters": {
                         "type": "object",
                         "properties": {
-                            "summary": {"type": "string", "description": "The topic of the meeting"},
-                            "start_datetime": {"type": "string", "description": "Start time in ISO format (YYYY-MM-DDTHH:MM:SS)"},
-                            "end_datetime": {"type": "string", "description": "End time in ISO format (YYYY-MM-DDTHH:MM:SS)"},
-                            "description": {"type": "string", "description": "Additional details about the appointment"},
-                            "attendees": {
-                                "type": "array",
-                                "items": {"type": "string", "format": "email"},
-                                "description": "List of email addresses for attendees"
-                            }
+                            "summary": {"type": "string", "description": "Meeting topic"},
+                            "start_datetime": {"type": "string", "description": "Start time (ISO format)"},
+                            "end_datetime": {"type": "string", "description": "End time (ISO format)"},
+                            "description": {"type": "string", "description": "Additional details"},
+                            "attendees": {"type": "array", "items": {"type": "string"}, "description": "Email addresses"}
                         },
                         "required": ["summary", "start_datetime", "end_datetime"]
                     }
                 }
-            }
-            
-            # Create messages array
-            messages = [
-                {"role": "system", "content": scheduling_system_message},
-                {"role": "user", "content": chat_request.query}
-            ]
-            
-            # Check if token count exceeds limit
-            message_tokens = count_tokens(messages)
-            if message_tokens > MAX_TOKENS:
-                # Calculate how much we need to reduce
-                excess_tokens = message_tokens - MAX_TOKENS + 500  # Buffer
+            }]
+            api_params["tool_choice"] = "auto"
+        
+        # Single OpenAI call
+        try:
+            response = client.chat.completions.create(**api_params)
+        except Exception as e:
+            print(f"OpenAI API error: {e}")
+            raise HTTPException(status_code=500, detail=f"AI service error: {str(e)}")
+        
+        message = response.choices[0].message
+        
+        # Handle tool calls (scheduling)
+        if hasattr(message, 'tool_calls') and message.tool_calls:
+            try:
+                print("Processing tool call for scheduling")
+                event_data = json.loads(message.tool_calls[0].function.arguments)
+                event_data['summary'] = event_data.get('summary') or "Appointment"
                 
-                # Recalculate with a shorter system message
-                max_system_tokens = len(encoder.encode(scheduling_system_message)) - excess_tokens
-                if max_system_tokens < 500:  # Minimum viable system message
-                    max_system_tokens = 500
+                if 'attendees' not in event_data:
+                    event_data['attendees'] = []
                 
-                scheduling_system_message = truncate_system_message(scheduling_system_message, max_system_tokens)
-                messages[0]["content"] = scheduling_system_message
+                if user.get('email') and user['email'] not in event_data['attendees']:
+                    event_data['attendees'].append(user['email'])
                 
-                # Verify we're now within limits
-                if count_tokens(messages) > MAX_TOKENS:
-                    # As a last resort, truncate the user query
-                    user_tokens = len(encoder.encode(chat_request.query))
-                    if user_tokens > 1000:  # Only truncate if it's long
-                        max_query_tokens = user_tokens - (count_tokens(messages) - MAX_TOKENS) - 100
-                        truncated_query = encoder.decode(encoder.encode(chat_request.query)[:max_query_tokens])
-                        truncated_query += " [message truncated]"
-                        messages[1]["content"] = truncated_query
-            
-            # DEBUG: Log messages before API call
-            print(f"Making scheduling API call with message tokens: {count_tokens(messages)}")
-            
-            # Make the API call with token-managed messages
-            response = client.chat.completions.create(
-                model="gpt-3.5-turbo",
-                messages=messages,
-                tools=[calendar_function],
-                tool_choice="auto"  # Explicitly tell the model to use tools when appropriate
-            )
-
-            # DEBUG: Log basic response info
-            print(f"Received response. Contains tool calls: {hasattr(response.choices[0].message, 'tool_calls') and bool(response.choices[0].message.tool_calls)}")
-            
-            message = response.choices[0].message
-            
-            # Check for tool calls from the API response
-            if message.tool_calls:
-                try:
-                    # DEBUG: Log tool call details
-                    print(f"Tool call received: {message.tool_calls[0].function.name}")
+                event_result = create_calendar_event(EventRequest(**event_data))
+                
+                if event_result["status"] == "success":
+                    start_time = event_data['start_datetime'].replace('T', ' at ').split('+')[0]
+                    response_text = f"✅ Appointment scheduled!\n📅 {event_data['summary']}\n🕒 {start_time}"
                     
-                    event_data = json.loads(message.tool_calls[0].function.arguments)
-                    print(f"Event data: {event_data}")
+                    if event_result.get('meet_link'):
+                        response_text += f"\n🔗 {event_result['meet_link']}"
                     
-                    # Validate that the requested service is active (if service is specified)
-                    is_valid_service = True
-                    if event_data.get('description') and business_settings and business_settings.get('services'):
-                        # Basic check if the description contains an inactive service name
-                        inactive_service_names = [s['serviceName'].lower() for s in business_settings.get('services', []) 
-                                            if not s.get('isActive', True)]
-                        
-                        for inactive_service in inactive_service_names:
-                            if inactive_service in event_data.get('description', '').lower():
-                                is_valid_service = False
-                                break
-                    
-                    if not is_valid_service:
-                        # If inactive service detected, return a helpful message
-                        inactive_response = "I notice you're interested in a service that isn't currently available. Here are the services we currently offer:\n\n"
-                        inactive_response += "\n".join(
-                            f"- {s['serviceName']}: {s.get('description', '')}" 
-                            for s in active_services
-                        )
-                        inactive_response += "\n\nWould you like to book an appointment for one of these services instead?"
-                        
-                        await save_chat_to_db(
-                            session_id=chat_request.session_id,
-                            query=chat_request.query,
-                            response=inactive_response,
-                            is_scheduling=True
-                        )
-                        
-                        return ChatResponse(
-                            user_id=user_id,
-                            response=inactive_response
-                        )
-                    
-                    event_data['summary'] = event_data.get('summary') or "Appointment"
-                    
-                    # Make sure we have both attendees and user email if available
-                    if 'attendees' not in event_data:
-                        event_data['attendees'] = []
-                    
-                    if user.get('email') and user['email'] not in event_data['attendees']:
-                        event_data['attendees'].append(user['email'])
-                    
-                    # Create the calendar event
-                    event_result = create_calendar_event(EventRequest(**event_data))
-                    
-                    if event_result["status"] == "success":
-                        # Format a friendly response for successful scheduling
-                        start_datetime = event_data['start_datetime'].replace('T', ' at ').split('+')[0]
-                        
-                        response_text = f"Great! I've scheduled your appointment:\n\n"
-                        response_text += f"📅 {event_data['summary']}\n"
-                        response_text += f"🕒 {start_datetime}\n"
-                        
-                        if event_data.get('description'):
-                            response_text += f"📝 {event_data['description']}\n"
-                        
-                        if event_result.get('meet_link'):
-                            response_text += f"\n🔗 Video call link: {event_result['meet_link']}"
-                        
-                        # Add confirmation number
-                        response_text += f"\n\nConfirmation #: {event_result['event_id'][-6:]}"
-                        
-                        # Save to database before returning
-                        await save_chat_to_db(
-                            session_id=chat_request.session_id,
-                            query=chat_request.query,
-                            response=response_text,
-                            is_scheduling=True,
-                            event_details=event_result
-                        )
-                        
-                        return ChatResponse(
-                            user_id=user_id,
-                            response=response_text,
-                            event_details=event_result
-                        )
-                    else:
-                        error_response = f"I tried to schedule your appointment, but encountered an error: {event_result.get('message')}"
-                        await save_chat_to_db(
-                            session_id=chat_request.session_id,
-                            query=chat_request.query,
-                            response=error_response,
-                            is_scheduling=True
-                        )
-                        return ChatResponse(
-                            user_id=user_id,
-                            response=error_response
-                        )
-                except Exception as tool_error:
-                    # Log the specific error with the tool call
-                    print(f"Error processing tool call: {str(tool_error)}")
-                    traceback.print_exc()
-                    
-                    # Fall back to regular response
-                    fallback_response = f"I encountered an issue while trying to schedule your appointment: {str(tool_error)}. Please try again with complete details including date, time, and purpose."
+                    response_text += f"\nConfirmation: {event_result['event_id'][-6:]}"
                     
                     await save_chat_to_db(
                         session_id=chat_request.session_id,
                         query=chat_request.query,
-                        response=fallback_response,
-                        is_scheduling=True
+                        response=response_text,
+                        is_scheduling=True,
+                        event_details=event_result
                     )
                     
-                    return ChatResponse(
-                        user_id=user_id,
-                        response=fallback_response
+                    return ChatResponse(user_id=user_id, response=response_text, event_details=event_result)
+                else:
+                    error_response = f"❌ Scheduling failed: {event_result.get('message')}"
+                    await save_chat_to_db(
+                        session_id=chat_request.session_id,
+                        query=chat_request.query,
+                        response=error_response,
+                        is_scheduling=True
                     )
-            else:
-                # The model didn't use the function, but we know it's a scheduling intent
-                # Let's get more information and proceed with normal chat flow
-                print("Model didn't use tool call despite scheduling intent. Using regular chat response.")
-                
-                # If the API didn't use the tool, we'll use a modified system message
-                # that encourages getting the details for next time
-                assist_system_message = system_message + "\n\nThe user wants to schedule an appointment. If you don't have enough details yet, ask Can I help you with a specific topic? like date, time, and purpose. DO NOT refuse to help with scheduling - that is your primary purpose. Never say you cannot book appointments. ONLY mention active services."
-                
-                if active_services:
-                    active_services_info = "\n".join(
-                        f"- {s['serviceName']}: {s.get('description', '')}" 
-                        for s in active_services[:5]
-                    )
-                    assist_system_message += f"\n\nACTIVE SERVICES:\n{active_services_info}"
-                
-                messages = [
-                    {"role": "system", "content": assist_system_message},
-                    {"role": "user", "content": chat_request.query}
-                ]
-                
-                # Check token count for regular messages
-                if count_tokens(messages) > MAX_TOKENS:
-                    # Apply token reduction as before
-                    assist_system_message = truncate_system_message(assist_system_message, 4000)
-                    messages[0]["content"] = assist_system_message
-                
-                # Use regular chat completion to ask for more details
-                chat_completion = client.chat.completions.create(
-                    model="gpt-3.5-turbo",
-                    messages=messages
-                )
-                
-                # Get text response
-                chat_response = chat_completion.choices[0].message.content
-                
-                # Save to database
+                    return ChatResponse(user_id=user_id, response=error_response)
+                    
+            except Exception as e:
+                print(f"Error processing tool call: {e}")
+                fallback_response = f"⚠️ Scheduling error. Please provide: date, time, topic, and email."
                 await save_chat_to_db(
                     session_id=chat_request.session_id,
                     query=chat_request.query,
-                    response=chat_response,
+                    response=fallback_response,
                     is_scheduling=True
                 )
-                
-                return ChatResponse(user_id=user_id, response=chat_response)
+                return ChatResponse(user_id=user_id, response=fallback_response)
         
-        # Regular chat flow (non-scheduling intent)
-        print("Using regular chat flow...")
+        # Regular response
+        chat_response = message.content
         
-        # Check if we should add greeting formatting
-        has_greeting = check_for_greeting(chat_request.query)
-        
-        # Add greeting instructions if needed
-        if has_greeting:
-            system_message += "\n\nIMPORTANT: Begin your response with a friendly greeting like 'Hello' or 'Hi there' and include an emoji right after the greeting word (with no space). For example: 'Hello👋' or 'Hi there😊'. The rest of your response should NOT contain any emojis."
-        else:
-            system_message += "\n\nIMPORTANT: DO NOT begin your message with greeting phrases like 'hello there', 'hi there', etc. DO NOT use emojis in your response."
-        
-        # Create messages for regular chat flow
-        messages = [
-            {"role": "system", "content": system_message},
-            {"role": "user", "content": chat_request.query}
-        ]
-        
-        # Check token count for regular messages
-        message_tokens = count_tokens(messages)
-        if message_tokens > MAX_TOKENS:
-            # Apply same token reduction logic as before
-            excess_tokens = message_tokens - MAX_TOKENS + 500  # Buffer
-            max_system_tokens = len(encoder.encode(system_message)) - excess_tokens
-            if max_system_tokens < 500:
-                max_system_tokens = 500
-            
-            system_message = truncate_system_message(system_message, max_system_tokens)
-            messages[0]["content"] = system_message
-            
-            # If still too large, truncate user query as last resort
-            if count_tokens(messages) > MAX_TOKENS:
-                user_tokens = len(encoder.encode(chat_request.query))
-                if user_tokens > 1000:
-                    max_query_tokens = user_tokens - (count_tokens(messages) - MAX_TOKENS) - 100
-                    truncated_query = encoder.decode(encoder.encode(chat_request.query)[:max_query_tokens])
-                    truncated_query += " [message truncated]"
-                    messages[1]["content"] = truncated_query
-        
-        # Make regular chat API call
-        chat_completion = client.chat.completions.create(
-            model="gpt-3.5-turbo",
-            messages=messages
-        )
-        
-        # Get the response content
-        chat_response = chat_completion.choices[0].message.content
-        
-        # Save to database
         await save_chat_to_db(
             session_id=chat_request.session_id,
             query=chat_request.query,
             response=chat_response,
-            is_scheduling=is_scheduling
+            is_scheduling=has_scheduling_keywords(chat_request.query)
         )
 
         return ChatResponse(user_id=user_id, response=chat_response)
 
+    except HTTPException:
+        raise
     except Exception as e:
-        print(f"Error in chat endpoint: {str(e)}")
+        print(f"Unexpected error in chat endpoint: {str(e)}")
+        import traceback
         traceback.print_exc()
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-
-
-
-
-
-
-
-
+        raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
 
 # chat history 
 

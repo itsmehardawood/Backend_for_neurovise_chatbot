@@ -229,300 +229,129 @@ async def detect_scheduling_intent(query: str) -> bool:
     )
     return response.choices[0].message.content.strip().lower() == 'yes'
 
-def prepare_system_message(business_settings, is_greeting=False, is_service_inquiry=False, is_scheduling=False):
-    """Prepare a system message with token management."""
-    # Base human message - common for all scenarios
-    base_human_message = """You are a friendly person having a casual conversation. By Default response in Hebrew language if user ask for english then response accordingly.
+def prepare_whatsapp_system_message(business_settings, user_query):
+    """
+    Single optimized system message for WhatsApp that handles everything
+    """
+    base_message = """You are a friendly WhatsApp business assistant. Rules:
 
-IMPORTANT: You must sound like a real human, not a chatbot or AI assistant. 
+LANGUAGE: Default Hebrew (unless user requests English)
 
-AVOID completely:
-- "How can I assist you today?"
-- "I'm here to help"
-- "How may I help you?"
-- "I'd be happy to assist"
-- "Is there anything else you need help with?"
-- Any variation of these standard assistant phrases
+AUTO-RESPONSES:
+- Greeting (hi/hello/hey) → Start with greeting + emoji: "שלום👋" or "Hello👋"
+- Service inquiry → List available services naturally
+- Scheduling → Ask for details or use function if provided
 
-DO THIS INSTEAD:
-- Use casual, conversational language like "Got it"
-- Talk like a friend would, not a service provider
-- Use contractions (I'm, you're, we'll, that's)
-- Be naturally helpful without saying you're "here to help"
-- Be concise - humans don't write long, perfect paragraphs
-- Occasionally use sentence fragments, like real texting
-- Remember that less formal = more human sounding
+SCHEDULING FORMAT:
+Hebrew: "האם תוכל לספק את הפרטים הבאים? 1. נושא הפגישה 2. תאריך ושעת התחלה 3. תאריך ושעה סיום 4. כתובת אימייל"
+English: "Can you provide: 1. Meeting topic 2. Start date/time 3. End date/time 4. Email address"
 
-Keep responses brief like a text message - not essay-length."""
+STYLE: Conversational, human-like, brief (like texting)"""
 
-    # Default system message if no business settings are found
-    if not business_settings:
-        system_message = f"""{base_human_message}
-
-For appointment scheduling, response should be this :
-
-Can you provide the following details?
-1. Meeting topic
-2. Start date and time
-3. End date and time
-4. email address
-
-
-if user asking appointment in hebrew then response this :
+    if business_settings:
+        if business_settings.get('system_prompt'):
+            base_message += f"\n\nBUSINESS: {business_settings['system_prompt']}"
+        
+        active_services = [s for s in business_settings.get('services', []) if s.get('isActive', True)]
+        if active_services:
+            services = "\n".join(f"- {s['serviceName']}: {s.get('description', '')[:60]}..." 
+                               for s in active_services[:5])
+            base_message += f"\n\nSERVICES:\n{services}"
+        
+        tone = business_settings.get('chat_tone', 'friendly')
+        base_message += f"\nTONE: {tone}"
     
-האם תוכל לספק את הפרטים הבאים?
-1. נושא הפגישה
-2. תאריך ושעת התחלה
-3. תאריך ושעה סיום
-4. כתובת אימייל
-
-Keep it conversational and friend and to the point directly - like texting a colleague."""
-        return system_message
-
-    # Extract business custom prompt
-    custom_prompt = business_settings.get('system_prompt', '')
-    
-    # Get business tone
-    tone = business_settings.get('chat_tone', 'professional')
-
-    # Filter for active services only
-    active_services = []
-    if business_settings.get('services') and isinstance(business_settings.get('services'), list):
-        active_services = [
-            service for service in business_settings['services']
-            if (isinstance(service, dict) and 
-                service.get('serviceName') and 
-                service.get('description') and 
-                service.get('isActive', False) == True)
-        ]
-
-    # Create services information for the first 5 active services
-    services_section = ""
-    if active_services:
-        services_info = "\n".join(
-            f"Service: {s['serviceName']}\nDescription: {s['description']}...\nPrice: {s.get('price', 'N/A')}"
-            for s in active_services[:5]  # Limit to 5 services to reduce token count
-        )
-        services_section = f"Available Services:\n{services_info}"
-    
-    # Build the system message with specific sections based on the type of inquiry
-    system_message = f"{base_human_message}\n\n{custom_prompt}"
-    
-    if services_section and (is_service_inquiry or is_scheduling):
-        system_message += f"\n\n{services_section}"
-    
-    # Add special instructions based on message type
-    if is_greeting:
-        system_message += "\n\nThe user has sent a greeting. Reply with a friendly greeting that includes an emoji."
-    
-    if is_service_inquiry:
-        system_message += "\n\nThe user is asking about services. Talk about the available services in a friendly way."
-    
-    if is_scheduling:
-        system_message += "\n\nThe user wants to schedule an appointment. Collect necessary information like date, time, and purpose."
-    
-    # Add tone instruction
-    system_message += f"\n\nRespond in a {tone}, human-like tone."
-    
-    # Ensure the system message doesn't exceed token limit (4000 is a safe limit)
-    return truncate_system_message(system_message, 4000)
+    return truncate_system_message(base_message, 2500)
 
 @twilio_router.post("/twilio/whatsapp")
-async def whatsapp_webhook(
+async def whatsapp_webhook_optimized(
     request: Request,
     Body: str = Form(...),
     From: str = Form(...),
     To: str = Form(...),
 ):
+    """
+    Optimized WhatsApp handler - single OpenAI call instead of multiple
+    """
     try:
-        # Extract phone numbers
+        # Extract numbers
         customer_number = From.replace("whatsapp:", "").replace("+", "").strip()
         owner_number = To.replace("whatsapp:", "").replace("+", "").strip()
 
-        print(f"[DEBUG] Customer: {customer_number}, Owner: {owner_number}")
-
-        # Find the business owner
+        # Find owner
         owner_user = users_collection.find_one({"phone_number": owner_number})
         if not owner_user:
-            print(f"[DEBUG] No matching owner user found.")
             return Response(status_code=200)
 
         owner_user_id = str(owner_user["_id"])
-
-        # Get business settings
         business_settings = business_settings_collection.find_one({"user_id": ObjectId(owner_user_id)})
         
-        # Count active services for logging
-        active_service_count = 0
-        if business_settings and business_settings.get('services'):
-            active_service_count = sum(
-                1 for s in business_settings['services'] 
-                if isinstance(s, dict) and s.get('isActive', False) == True
-            )
-            print(f"[DEBUG] Found {active_service_count} active services")
+        # Prepare single optimized system message
+        system_message = prepare_whatsapp_system_message(business_settings, Body)
         
-        # Detect message intent
-        user_greeting = is_greeting(Body)
-        user_service_inquiry = is_service_inquiry(Body)
+        # Simple keyword detection (no AI needed)
+        is_scheduling = has_scheduling_keywords(Body)
         
-        print(f"[DEBUG] {'Greeting detected.' if user_greeting else ''}")
-        print(f"[DEBUG] {'Service inquiry detected.' if user_service_inquiry else ''}")
-
-        # Check for scheduling intent 
-        # Only run this if it's not a service inquiry (to save API calls)
-        is_scheduling = False
-        if not user_service_inquiry and not user_greeting:
-            try:
-                is_scheduling = await detect_scheduling_intent(Body)
-                print("here is the is scheduling : ", is_scheduling)
-                if is_scheduling:
-                    print("[DEBUG] Scheduling intent detected.")
-            except Exception as e:
-                print(f"[ERROR] Failed to detect scheduling intent: {str(e)}")
-                # Continue even if scheduling detection fails
-
-        # Prepare system message based on intent
-        system_message = prepare_system_message(
-            business_settings,
-            is_greeting=user_greeting,
-            is_service_inquiry=user_service_inquiry,
-            is_scheduling=is_scheduling
-        )
-
-        # Handle scheduling intent
+        # Create messages
+        messages = [
+            {"role": "system", "content": system_message},
+            {"role": "user", "content": Body}
+        ]
+        
+        # Create API parameters
+        api_params = {
+            "model": "gpt-3.5-turbo",
+            "messages": messages
+        }
+        
+        # Add tools only if scheduling detected
         if is_scheduling:
-            try:
-                # Create an optimized system message
-                scheduling_system_message = system_message + "\n\nThe user is trying to schedule an appointment. Help the user schedule by collecting the necessary information and use the function if you have enough info."
-                
-                # Check token count for scheduling message
-                scheduling_messages = [
-                    {"role": "system", "content": scheduling_system_message},
-                    {"role": "user", "content": Body}
-                ]
-                
-                # Maximum context length for GPT-3.5-turbo
-                MAX_TOKENS = 16000
-                
-                # Check if we need to truncate
-                message_tokens = count_tokens(scheduling_messages)
-                if message_tokens > MAX_TOKENS:
-                    # Calculate how much to truncate
-                    excess_tokens = message_tokens - MAX_TOKENS + 500  # Buffer
-                    
-                    # Truncate system message
-                    max_system_tokens = len(encoder.encode(scheduling_system_message)) - excess_tokens
-                    if max_system_tokens < 500:  # Minimum viable system message
-                        max_system_tokens = 500
-                    
-                    scheduling_system_message = truncate_system_message(scheduling_system_message, max_system_tokens)
-                    scheduling_messages[0]["content"] = scheduling_system_message
-                
-                # Create function configuration for calendar event
-                calendar_function = {
-                    "type": "function",
-                    "function": {
-                        "name": "create_calendar_event",
-                        "description": "Schedule a calendar appointment",
-                        "parameters": {
-                            "type": "object",
-                            "properties": {
-                                "summary": {"type": "string", "description": "Meeting Topic"},
-                                "start_datetime": {"type": "string", "description": "Start time in ISO format (YYYY-MM-DDTHH:MM:SS)"},
-                                "end_datetime": {"type": "string", "description": "End time in ISO format (YYYY-MM-DDTHH:MM:SS)"},
-                                "description": {"type": "string", "description": "Additional details about the appointment"},
-                                "attendees": {
-                                    "type": "array",
-                                    "items": {"type": "string", "format": "email"},
-                                    "description": "List of email addresses for attendees"
-                                }
-                            },
-                            "required": ["summary", "start_datetime", "end_datetime"]
-                        }
+            api_params["tools"] = [{
+                "type": "function",
+                "function": {
+                    "name": "create_calendar_event",
+                    "description": "Schedule appointment",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "summary": {"type": "string"},
+                            "start_datetime": {"type": "string"},
+                            "end_datetime": {"type": "string"},
+                            "description": {"type": "string"},
+                            "attendees": {"type": "array", "items": {"type": "string"}}
+                        },
+                        "required": ["summary", "start_datetime", "end_datetime"]
                     }
                 }
-                
-                # Make the API call
-                response = openai_client.chat.completions.create(
-                    model="gpt-3.5-turbo",
-                    messages=scheduling_messages,
-                    tools=[calendar_function],
-                    tool_choice="auto"
-                )
+            }]
+            api_params["tool_choice"] = "auto"
+        
+        # Single API call
+        response = openai_client.chat.completions.create(**api_params)
 
-                message = response.choices[0].message
-                
-                # Process tool calls if available
-                if message.tool_calls:
-                    try:
-                        event_data = json.loads(message.tool_calls[0].function.arguments)
-                        event_data['summary'] = event_data.get('summary') or "Appointment"
-
-                        if owner_user.get('email'):
-                            event_data.setdefault('attendees', []).append(owner_user['email'])
-
-                        event_result = create_calendar_event(EventRequest(**event_data))
-
-                        if event_result["status"] == "success":
-                            reply_text = (
-                                f"All set! {event_data['summary']} scheduled for {event_data['start_datetime'].split('T')[0]} at {event_data['start_datetime'].split('T')[1][:5]}"
-                            )
-                            if event_result.get('meet_link'):
-                                reply_text += f"\n\nHere's your meeting link: {event_result['meet_link']}"
-                        else:
-                            reply_text = f"Hmm, couldn't schedule that. {event_result.get('message', 'Try again?')}"
-                    except Exception as e:
-                        print(f"[ERROR] Failed parsing event details: {e}")
-                        reply_text = "Need a bit more info for scheduling. What date and time works for you? And your email?"
-                else:
-                    # If no tool calls, just use the message content
-                    reply_text = message.content
-            except Exception as e:
-                print(f"[ERROR] Scheduling error: {str(e)}")
-                reply_text = "I'd like to help schedule that, but I need a bit more information. Could you specify the date, time, and what service you're interested in?"
-        else:
-            # Handle regular queries
+        message = response.choices[0].message
+        
+        # Handle scheduling tool calls
+        if message.tool_calls:
             try:
-                print(f"[DEBUG] Processing regular chat. Query: {Body}")
+                event_data = json.loads(message.tool_calls[0].function.arguments)
+                event_data['summary'] = event_data.get('summary') or "Appointment"
                 
-                # Create messages for the API
-                messages = [
-                    {"role": "system", "content": system_message},
-                    {"role": "user", "content": Body}
-                ]
-                
-                # Check token count
-                MAX_TOKENS = 16000
-                message_tokens = count_tokens(messages)
-                
-                if message_tokens > MAX_TOKENS:
-                    # Truncate system message if needed
-                    excess_tokens = message_tokens - MAX_TOKENS + 500  # Buffer
-                    max_system_tokens = len(encoder.encode(system_message)) - excess_tokens
-                    if max_system_tokens < 500:
-                        max_system_tokens = 500
-                    
-                    system_message = truncate_system_message(system_message, max_system_tokens)
-                    messages[0]["content"] = system_message
-                
-                # Call the API with token-optimized messages
-                response = openai_client.chat.completions.create(
-                    model="gpt-3.5-turbo",
-                    messages=messages
-                )
-                
-                reply_text = response.choices[0].message.content
-                
-                # For greetings, ensure emoji is present
-                if user_greeting:
-                    reply_text = add_greeting_emoji(reply_text, True)
-                
-                # Remove redundant greeting phrases
-                reply_text = re.sub(r'^(hello there|hey there|hi there)[,.!]?\s+', '', reply_text, flags=re.IGNORECASE).strip()
-                
-            except Exception as e:
-                print(f"[ERROR] Regular chat error: {str(e)}")
-                reply_text = "Sorry, I couldn't process that message. Could you try again?"
+                if owner_user.get('email'):
+                    event_data.setdefault('attendees', []).append(owner_user['email'])
+
+                event_result = create_calendar_event(EventRequest(**event_data))
+
+                if event_result["status"] == "success":
+                    reply_text = f"✅ נקבע! {event_data['summary']} ב-{event_data['start_datetime'].split('T')[0]}"
+                    if event_result.get('meet_link'):
+                        reply_text += f"\n🔗 {event_result['meet_link']}"
+                else:
+                    reply_text = f"❌ שגיאה בקביעת התור: {event_result.get('message', 'נסה שוב')}"
+            except:
+                reply_text = "צריך עוד פרטים לקביעת התור. תאריך, שעה ונושא?"
+        else:
+            reply_text = message.content
 
         # Save chat history
         chat_history_collection.update_one(
@@ -545,14 +374,13 @@ async def whatsapp_webhook(
             upsert=True
         )
 
-        # Create Twilio response
+        # Return response
         twilio_response = MessagingResponse()
         twilio_response.message(reply_text)
         return Response(content=str(twilio_response), media_type="application/xml")
 
     except Exception as e:
-        print(f"[ERROR] {str(e)}")
-        traceback.print_exc()
+        print(f"WhatsApp error: {str(e)}")
         twilio_response = MessagingResponse()
-        twilio_response.message("Oops! Something went wrong on our end. Mind trying again?")
+        twilio_response.message("שגיאה טכנית, נסה שוב")
         return Response(content=str(twilio_response), media_type="application/xml")

@@ -42,6 +42,56 @@ GREETING_EMOJIS = ["👋", "😊", "👍", "✨", "🌟", "🙂", "👏", "🤗"
 RATE_LIMITED = False
 RATE_LIMIT_UNTIL = datetime.datetime.now()
 
+# Remove these complex functions from utils.py - they're not needed anymore:
+
+# DELETE THESE FUNCTIONS (OpenAI handles this now):
+# - get_chat_completion() - replaced by direct API calls
+# - check_for_greeting() - replaced by simple regex
+# - check_for_proper_greeting() - not needed
+# - remove_greeting() - not needed  
+# - get_fallback_response() - simplified
+# - detect_scheduling_intent() - replaced by keyword detection
+
+# KEEP ONLY THESE ESSENTIAL FUNCTIONS:
+
+def simple_fallback_response(query_type="general"):
+    """Simple fallback without AI calls"""
+    responses = {
+        "greeting": "היי👋 איך אני יכול לעזור?",
+        "scheduling": "אשמח לעזור לקבוע פגישה. איזה תאריך ושעה מתאימים?",
+        "service": "תודה על הפנייה! איך אני יכול לעזור לך היום?",
+        "general": "תודה על הפנייה! איך אני יכול לעזור?"
+    }
+    return responses.get(query_type, responses["general"])
+
+def has_scheduling_keywords(text):
+    """Simple keyword detection - no AI needed"""
+    keywords = [
+        'schedule', 'book', 'appointment', 'reserve', 'meet', 'calendar', 
+        'when can', 'available', 'תור', 'לקבוע', 'פגישה', 'זמין', 'מתי'
+    ]
+    text_lower = text.lower()
+    return any(keyword in text_lower for keyword in keywords)
+
+def is_simple_greeting(text):
+    """Simple greeting detection - no AI needed"""
+    greetings = [
+        'hi', 'hello', 'hey', 'yo', 'greetings', 'good morning', 'good evening',
+        'שלום', 'היי', 'בוקר טוב', 'ערב טוב', 'שלום לך'
+    ]
+    text_clean = text.strip().lower()
+    return any(text_clean.startswith(greeting) for greeting in greetings)
+
+def is_service_inquiry(text):
+    """Simple service inquiry detection"""
+    keywords = [
+        'services', 'service', 'offer', 'providing', 'do you have', 
+        'what do you do', 'what do you provide', 'options',
+        'שירותים', 'שירות', 'מה אתם', 'מה תן', 'איך אתם'
+    ]
+    text_lower = text.lower()
+    return any(keyword in text_lower for keyword in keywords)
+
 class EventRequest(BaseModel):
     summary: str
     start_datetime: str
